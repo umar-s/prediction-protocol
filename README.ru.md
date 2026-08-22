@@ -20,7 +20,7 @@ CLI `predict` открывает receipt, сам исполняет измере
 ## Как это работает
 
 ```
-predict on DEV-512                      # сессия под протоколом; selftest печатает predict-gate: active v1.0.0
+predict on DEV-512                      # сессия под протоколом; selftest печатает predict-gate: active v1.0.1
 predict open --action 'alembic upgrade head' \
   --hypothesis '0042 добавляет индекс, не трогая строки' \
   --observe "psql -tAc 'select count(*) from orders'" --expect 'count=10422'

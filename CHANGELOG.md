@@ -5,6 +5,15 @@ All notable changes to this plugin. The format follows
 [SemVer](https://semver.org/). The single source of the version is
 `plugins/prediction-protocol/.claude-plugin/plugin.json`.
 
+## [1.0.1] — 2026-08-22
+
+### Fixed
+- `predict on` printed a stray `0` line after the session line when no
+  `--also` wrapper was given (`grep -c` prints its count *and* exits 1 on zero
+  matches, so the `|| echo 0` fallback fired too). Found by the loop-foundry
+  runner acceptance, which parses that output; a control in `tests/run.sh`
+  now pins "exactly two lines".
+
 ## [1.0.0] — 2026-08-22
 
 ### Added
@@ -84,4 +93,5 @@ All notable changes to this plugin. The format follows
   in an **interactive** session is asserted from the documentation, not yet
   observed — first interactive run to confirm.
 
+[1.0.1]: https://github.com/umar-s/prediction-protocol/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/umar-s/prediction-protocol/releases/tag/v1.0.0

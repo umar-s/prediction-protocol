@@ -42,6 +42,7 @@ echo "# 3 predict on / selftest / grammar"
 mkdir -p "$T/repo" && git -C "$T/repo" init -q && cd "$T/repo"
 "$predict" on DEV-1 --also 'make deploy' > "$T/on.out"; check "on prints active+selftest rc0" '[ $? -eq 0 ] && grep -q "predict-gate: active v" "$T/on.out"'
 "$predict" on nightly --loop > "$T/on2.out"; check "on <name> --loop is a flag" '[ $? -eq 0 ] && grep -q "loops/evidence/nightly.md" "$T/on2.out"'
+check "on prints exactly two lines (gate line + session line) — a runner parses this" '[ "$(wc -l < "$T/on2.out")" -eq 2 ] && ! grep -qx "0" "$T/on2.out"'
 "$predict" on DEV-1 --task >/dev/null
 "$predict" on 'bad name' 2>/dev/null; check "journal name validated" '[ $? -eq 2 ]'
 PP_SESSION='../x' "$predict" status 2>/dev/null; check "session id validated" '[ $? -eq 2 ]'
@@ -51,7 +52,7 @@ PP_STATE_DIR="$T/state2" "$T/broken/bin/predict" on DEV-9 > "$T/on3.out" 2>&1; c
 
 echo "# 4 in scope, no receipt / subagent / wrappers"
 gate "$S" 'git push --force origin main';  check "in-scope no receipt → deny with recipe (both channels)" 'is_deny && printf "%s" "$OUT" | grep -q "predict.* open --action" && printf "%s" "$ERR" | grep -q "open --action"'
-printf '%s' "$OUT" | grep -q 'v1\.0\.0' && ok || bad "version in reason"
+printf '%s' "$OUT" | grep -qF "v$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$P/.claude-plugin/plugin.json")" && ok || bad "version in reason"
 printf '%s' "$OUT" | grep -q "expect '<count=N" && ok || bad "recipe placeholder starts with count=N, not exit=N"
 gate "$S" 'git push --force origin main' ',"agent_id":"a1"'; check "subagent → deny 'finding'" 'is_deny && printf "%s" "$OUT" | grep -q finding'
 gate "$S" 'make deploy';                   check "--also wrapper → deny"            'is_deny'

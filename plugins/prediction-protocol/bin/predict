@@ -115,7 +115,8 @@ cmd_on() {
   pp_kv_get "$STATE" seq >/dev/null 2>&1 || pp_kv_set "$STATE" seq 0
   if [ "${#also[@]}" -gt 0 ]; then : > "$SDIR/also"; local a; for a in "${also[@]}"; do printf '%s\n' "$a" >> "$SDIR/also"; done; fi
   [ -e "$SDIR/also" ] || : > "$SDIR/also"
-  echo "predict: session $SID8 under the protocol · journal $jp · one-way wrappers: $(grep -c . "$SDIR/also" 2>/dev/null || echo 0)"
+  local nalso; nalso="$(grep -c . "$SDIR/also" 2>/dev/null)"   # grep -c prints the count even when it exits 1 on zero matches
+  echo "predict: session $SID8 under the protocol · journal $jp · one-way wrappers: ${nalso:-0}"
   local halted; halted="$(pp_kv_get "$STATE" halted 2>/dev/null || true)"
   [ -z "$halted" ] || { echo "predict: still halted on $halted — ack / retry / withdraw before the next one-way action"; return 1; }
   return 0

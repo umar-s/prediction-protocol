@@ -21,7 +21,7 @@ one is an intention.
 ## How it works
 
 ```
-predict on DEV-512                      # the session is under the protocol; selftest prints predict-gate: active v1.0.0
+predict on DEV-512                      # the session is under the protocol; selftest prints predict-gate: active v1.0.1
 predict open --action 'alembic upgrade head' \
   --hypothesis '0042 adds the index without touching rows' \
   --observe "psql -tAc 'select count(*) from orders'" --expect 'count=10422'
