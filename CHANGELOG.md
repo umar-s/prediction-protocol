@@ -32,6 +32,26 @@ All notable changes to this plugin. The format follows
 A running session keeps the plugin version it started with (hooks and the
 exported `PREDICT`): the fix applies to sessions started after the update.
 
+### Acceptance (interactive auto-mode session, Claude Code 2.1.240, plugin installed from the catalog)
+- The transcript carries `{"type":"permission-mode","permissionMode":"auto"}`
+  before every turn (offsets 233 … 189493 of a 197 KB file), so the 256 KB
+  tail window in `pp_delegated` keeps the marker; stdin still says
+  `permission_mode: "default"`.
+- Outside the protocol a `git push --force` to a local bare origin ran
+  silently — no "requires confirmation" stop. The same hook input replayed by
+  hand with this session's transcript → empty output, exit 0; with a
+  marker-less transcript → `ask`.
+- `predict on` → `predict-gate: active v1.0.3`; the same force-push without a
+  receipt → deny + recipe; with a receipt for the exact command → silent pass,
+  PostToolUse marked it fired, `close` → HIT, `report` with `gate: seen`;
+  `off` recorded as a bypass.
+- Observed, not changed: under the protocol a read-only look at the state
+  directory from Bash (`ls …/sessions/<id> 2>/dev/null`, `cat …/state`) is
+  denied as `state-tamper` — `lib/classify.sh` flags the path together with
+  `cat` in its verb list or any `>` (a `2>/dev/null` counts). `predict report`
+  is the sanctioned view; a narrower rule is a 1.0.4 candidate.
+- Still not observed: macOS; a real runner user on a separate host.
+
 ## [1.0.2] — 2026-08-22
 
 ### Fixed
