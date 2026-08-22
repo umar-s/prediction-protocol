@@ -71,4 +71,17 @@ All notable changes to this plugin. The format follows
   refuters → critic): record in task-flow's
   `docs/premortem/2026-08-22-prediction-protocol-premortem.md`.
 
+### Supply-chain self-check (devpowers release ritual)
+- Network verbs in the payload: none. `base64` in `hooks/predict-gate.sh` is
+  the stdin-field transport between the python/jq parser and bash (`base64
+  -d` of the command text only). `rm -rf` in `bin/predict` removes its own
+  `mktemp -d` directories. `eval`/`rm -rf`/`curl` strings in
+  `lib/classify.sh` and `tests/corpus/` are the classifier's vocabulary and
+  fixtures, never executed.
+- Acceptance through the installed plugin (`claude -p`, Claude Code 2.1.239):
+  deny with recipe → the model opened the receipt → PostToolUse marked it
+  fired → `close` HIT → `report` with `gate: seen`. `permissionDecision: ask`
+  in an **interactive** session is asserted from the documentation, not yet
+  observed — first interactive run to confirm.
+
 [1.0.0]: https://github.com/umar-s/prediction-protocol/releases/tag/v1.0.0
