@@ -1,0 +1,100 @@
+# one command per line; "# class" comments are documentation only. Every line must classify as one-way.
+alembic upgrade head
+bundle exec rails db:migrate
+php artisan migrate --force
+npx prisma migrate deploy
+flyway migrate
+python manage.py migrate
+dotnet ef database update
+goose up
+psql -f 0042.sql
+psql -d app < dump.sql
+psql -c 'DROP TABLE legacy'
+psql -c "delete from users where 1=1"
+psql -U app -c 'update orders set status=1'
+mysql -e 'TRUNCATE t'
+redis-cli FLUSHALL
+redis-cli -n 2 flushdb
+mongosh --eval 'db.dropDatabase()'
+echo x | psql -d app
+cat <<'SQL' | psql -d app
+git push --force origin main
+git push -f
+git push --force-with-lease origin feat
+git push origin --delete feat
+git push origin :feat
+git push origin +main
+git branch -D feat
+gh pr merge 3 --squash
+glab mr merge 5
+gh release create v1.0.0 --notes-file n.md
+kubectl delete pod x
+kubectl apply -f k.yml
+kubectl rollout restart deploy/app
+helm upgrade app ./chart
+terraform apply -auto-approve
+terraform destroy
+terraform state rm aws_instance.x
+docker rm -f app
+docker system prune -af
+docker compose down -v
+systemctl restart nginx
+sudo systemctl stop app
+sudo -u app systemctl restart app
+pm2 restart all
+reboot
+ssh prod 'systemctl restart app'
+ssh deploy@prod systemctl restart app
+ssh -p 2222 prod "df -h"
+kubectl exec -it pod -- sh -c 'rm -rf /data'
+docker exec db psql -c 'drop table x'
+curl -X POST https://api.example.com/deploy
+curl -d '{}' https://hooks.slack.com/services/x
+curl --json '{}' https://api.example.com/x
+http DELETE https://api.example.com/x
+wget --post-data x https://api.example.com/x
+gh api -X DELETE repos/o/r/branches/x
+aws iam delete-user --user-name x
+aws s3 rm s3://bucket/key
+aws ec2 terminate-instances --instance-ids i-1
+gcloud compute instances delete x
+az group delete -n x
+vault kv delete secret/x
+gh secret set TOKEN
+npm publish
+twine upload dist/*
+docker push repo/img
+cargo publish
+rm -rf ./build
+rm -rf ~/old
+sudo rm -rf /var/lib/x
+rm -r src/legacy
+find /srv -name '*.log' -delete
+dd if=/dev/zero of=/dev/sda
+mkfs.ext4 /dev/sdb1
+bash -c 'git push --force origin main'
+sh -c "psql -f x.sql"
+eval "terraform destroy"
+env FOO=1 terraform apply
+VAR=1 sudo -u app systemctl restart app
+timeout 60 alembic upgrade head
+nohup systemctl restart app &
+time terraform apply
+cd app && alembic upgrade head
+make test && git push --force
+ls; rm -rf ./dist
+xargs rm -rf < list.txt
+sendmail -t < mail.txt
+crontab -r
+userdel bob
+iptables -F
+scp build.tgz deploy@prod:/srv/app/
+rsync -a --delete dist/ prod:/var/www/
+chmod -R 777 /etc/app
+ansible-playbook site.yml
+kubectl scale deploy/app --replicas=0
+sudo -E env PATH=$PATH systemctl restart app
+git push --force origin main # --help
+terraform apply -auto-approve # -h
+ssh prod 'systemctl restart app --help'
+psql -c 'drop table x' #version

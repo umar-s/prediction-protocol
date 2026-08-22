@@ -1,0 +1,18 @@
+{
+  "description": "prediction-protocol — PreToolUse gate on the Bash tool: a one-way command (migration, force-push, merge, deploy, restart, remote exec, mutating HTTP, grants/secrets, recursive delete) is denied unless the session holds an open receipt for that exact command; outside the protocol it asks. Fail-closed: any gate error or deadline overrun denies.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/predict-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "prediction-protocol: checking the receipt"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,99 @@
+# one command per line. Every line must classify as NOT one-way (rc 1).
+grep -rn 'DELETE FROM' src/
+git log --grep delete
+git log -S'drop_table' --oneline
+git branch -d feat/x
+git branch --delete feat/x
+git branch -a
+git checkout -- file
+git restore .
+git reset --hard HEAD~1
+git clean -fdx
+git push origin feature
+git push
+git push -u origin prediction-protocol-premortem
+git commit -m 'drop table migration'
+git diff --stat main..HEAD
+truncate -s0 dev.log
+psql -c 'select count(*) from t'
+psql -c '\dt'
+psql -U app -d app -c "SELECT 1"
+mysql -e 'show tables'
+redis-cli ping
+redis-cli get key
+rm -rf /tmp/x
+rm -rf "$TMPDIR/x"
+rm -rf /tmp/claude-1000/scratch/wt5
+rm -f notes.txt
+rm notes.txt
+bash scripts/lint.sh
+bash tests/run.sh
+make test
+make build
+npm test
+npm run lint
+npx prisma generate
+npx prisma migrate status
+python -m pytest -q
+python manage.py showmigrations
+alembic current
+alembic history
+curl -s localhost:8080/health
+curl -X POST localhost:3000/api/echo
+curl -X POST http://127.0.0.1:8000/x -d '{}'
+curl -sS https://api.example.com/status
+curl -s -o /dev/null -w '%{http_code}' https://example.com/
+http GET https://api.example.com/x
+wget https://example.com/file.tgz
+kubectl get pods
+kubectl logs deploy/app
+kubectl describe pod x
+kubectl apply --dry-run=client -f k.yml
+helm list
+terraform plan
+terraform validate
+docker ps
+docker images
+docker compose up -d
+docker compose logs -f
+docker build -t x .
+systemctl status nginx
+sudo systemctl status app
+journalctl -u app -n 50
+pm2 list
+ssh -N -L 5432:db:5432 bastion
+ssh prod
+aws s3 ls
+aws sts get-caller-identity
+aws ec2 describe-instances
+gcloud compute instances list
+gh pr view 3
+gh pr create --title x --body y
+gh pr merge --help
+gh run list
+gh release view v1.0.0
+gh api repos/o/r/pulls/3
+glab mr view 5
+cat <<EOF > notes.md
+echo DROP TABLE x
+printf 'rm -rf %s\n' "$d"
+python3 -c "print('rm -rf')"
+ls; cat x && git push origin main
+sudo systemctl status x
+time make build
+find . -name '*.pyc'
+find /tmp/x -name '*.log' -delete
+sed -n '1,40p' file
+cat file | grep delete
+echo 'git push --force' > todo.txt
+chmod +x script.sh
+chown app:app file
+crontab -l
+vault kv get secret/x
+npm publish --help
+cargo build
+sendmail --version
+git --version
+terraform -help
+kubectl delete --help
+echo '# not a comment' && ls
