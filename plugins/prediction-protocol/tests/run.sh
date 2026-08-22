@@ -36,6 +36,15 @@ gate s0 'git push --force origin main';       check "oos interactive one-way →
 gate s0 'ls -la';                              check "oos irrelevant → silent"         'is_silent'
 PP_ENTRYPOINT=sdk-cli gate s0 'git push --force origin main'; check "oos headless one-way → silent" 'is_silent'
 PP_ENTRYPOINT=sdk-cli gate s0 'git push --force origin main' ',"agent_id":"a1"'; check "oos headless subagent → silent (nobody to ask)" 'is_silent'
+# delegated sessions: the human chose not to be asked — the interactive ask rows go silent, the deny rows stay
+for pm in auto dontAsk bypassPermissions; do gate s0 'git push --force origin main' ",\"permission_mode\":\"$pm\""; check "oos permission_mode=$pm → silent (the platform decides)" 'is_silent'; done
+for pm in default acceptEdits plan; do gate s0 'git push --force origin main' ",\"permission_mode\":\"$pm\""; check "oos permission_mode=$pm → ask" 'is_ask'; done
+gate s0 'git push --force origin main' ',"permission_mode":"auto","agent_id":"a1"'; check "oos delegated subagent → silent" 'is_silent'
+printf '{"type":"user","permissionMode":"default"}\n{"type":"permission-mode","permissionMode":"auto","sessionId":"x"}\n' > "$T/tr-auto.jsonl"
+printf '{"type":"permission-mode","permissionMode":"auto","sessionId":"x"}\n{"type":"permission-mode","permissionMode":"default","sessionId":"x"}\n' > "$T/tr-back.jsonl"
+gate s0 'git push --force origin main' ",\"permission_mode\":\"default\",\"transcript_path\":\"$T/tr-auto.jsonl\""; check "oos stdin default but transcript's last marker auto → silent" 'is_silent'
+gate s0 'git push --force origin main' ",\"permission_mode\":\"default\",\"transcript_path\":\"$T/tr-back.jsonl\""; check "oos transcript toggled back to default → ask (last marker wins)" 'is_ask'
+gate s0 'git push --force origin main' ",\"permission_mode\":\"default\",\"transcript_path\":\"$T/does-not-exist.jsonl\""; check "oos unreadable transcript → ask (not delegated)" 'is_ask'
 OUT="$(stdin s0 'git push --force' | sed 's/"Bash"/"Read"/' | bash "$gate")"; check "non-Bash tool → silent" '[ -z "$OUT" ]'
 
 echo "# 3 predict on / selftest / grammar"
@@ -180,6 +189,15 @@ PP_SESSION="tk-1" "$predict" on TK-1 --task >/dev/null
 N="$(PP_SESSION="tk-1" "$predict" open --scope advisory --action x --hypothesis h --observe 'echo 1' --expect count=2 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
 PP_SESSION="tk-1" "$predict" close "$N" >/dev/null 2>&1
 PP_SESSION="tk-1" CLAUDE_CODE_SESSION_ID=exec-1 "$predict" ack "$N" --refuted b --where w >/dev/null; check "task: ack inside a Claude session is the model's act (unchanged)" '[ $? -eq 0 ]'
+
+echo "# 10c delegated session under the protocol: deny without a receipt, silent with one"
+PP_SESSION="dl-1" "$predict" on DL-1 --task >/dev/null
+PP_SESSION="dl-1" gate dl-1 'git push --force origin main' ',"permission_mode":"auto"'; check "delegated, under the protocol, no receipt → deny + recipe (the witness is required, the human is not)" 'is_deny && printf "%s" "$OUT" | grep -q "open --action"'
+D="$(PP_SESSION="dl-1" "$predict" open --action 'rm -rf ./dl' --hypothesis h --observe 'ls -d dl 2>/dev/null | wc -l' --expect 'count=0' | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION="dl-1" gate dl-1 'rm -rf ./dl' ',"permission_mode":"auto"' td; check "delegated with a matching receipt → silent pass, receipt consumed" 'is_silent && [ -e "$PP_STATE_DIR/sessions/dl-1/receipts/$D/consumed" ]'
+stdin dl-1 'rm -rf ./dl' '' td | PP_SESSION="dl-1" bash "$fired"; mkdir -p dl; rm -rf ./dl; PP_SESSION="dl-1" "$predict" close "$D" >/dev/null; check "delegated receipt closes → HIT" '[ $? -eq 0 ]'
+PP_SESSION="dl-1" gate dl-1 'rm -rf ./dl' ',"permission_mode":"auto"'; check "delegated, receipt spent → deny again (one-shot)" 'is_deny'
+PP_SESSION="dl-1" gate dl-1 'rm -rf ./dl' ',"permission_mode":"auto","agent_id":"a1"'; check "delegated subagent under the protocol → deny" 'is_deny'
 
 echo "# 11 ids and journals"
 PP_SESSION="nightly-2026-08-21" "$predict" on nightly --loop >/dev/null; PP_SESSION="nightly-2026-08-22" "$predict" on nightly --loop >/dev/null

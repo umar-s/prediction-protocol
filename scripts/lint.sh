@@ -26,6 +26,8 @@ grep -q 'pp_with_deadline "${PP_DEADLINE:-9}"' $P/hooks/predict-gate.sh || err "
 grep -q 'pp_prefilter "$input" || pp_prefilter_also "$input" || exit 0' $P/hooks/predict-gate.sh || err "gate lost the pre-filter"
 grep -q 'deny_literal "lib/common.sh is missing' $P/hooks/predict-gate.sh || err "gate lost the missing-lib deny"
 grep -q 'hook-seen' $P/hooks/predict-gate.sh || err "gate lost the liveness stamp"
+grep -q 'pp_delegated "$permission_mode" "$transcript_path"' $P/hooks/predict-gate.sh && [ "$(grep -c '\[ "$delegated" = 0 \] || pass' $P/hooks/predict-gate.sh)" -eq 2 ] || err "gate lost the delegated-session rule (auto mode must not ask; both ask sites)"
+grep -q 'auto|dontAsk|bypassPermissions' $P/lib/common.sh && grep -q '"permissionMode":"' $P/lib/common.sh || err "pp_delegated lost a mode or the transcript marker"
 grep -q 'for i in 1 2 3 4 5 6 7 8 11 12 14 15' $P/lib/common.sh || err "pp_json_str lost the control-byte escaping"
 grep -q 'gtimeout' $P/lib/common.sh || err "pp_with_deadline lost its fallback chain"
 grep -q 'export LC_ALL=C' $P/lib/common.sh && grep -q 'export LC_ALL=C' $P/lib/classify.sh || err "LC_ALL=C missing"
@@ -54,17 +56,18 @@ grep -q 'bin/predict|predict)\[\[:space:\]\]+(on|off|open' $P/lib/classify.sh ||
 [ -s $P/tests/corpus/multiline-deny.txt ] && [ -s $P/tests/corpus/multiline-pass.txt ] || err "multi-line corpora missing"
 # SKILL contract: thin, names the commands, the halt rule, the scope rule, platform limits
 S=$P/skills/prediction-protocol/SKILL.md
-for ph in '"$P" on' '"$P" open' '"$P" close' '"$P" ack' '"$P" report' '"$P" off' 'MISS' 'INCONCLUSIVE' '`Bash` tool only' 'Wrapping is a bypass' 'never write `actual`' 'advisory' 'PREDICT' 'gate: seen' 'PP_SESSION' '--where'; do grep -qF -- "$ph" "$S" || err "SKILL.md lost: $ph"; done
+for ph in '"$P" on' '"$P" open' '"$P" close' '"$P" ack' '"$P" report' '"$P" off' 'MISS' 'INCONCLUSIVE' '`Bash` tool only' 'Wrapping is a bypass' 'never write `actual`' 'advisory' 'PREDICT' 'gate: seen' 'PP_SESSION' '--where' '| auto mode'; do grep -qF -- "$ph" "$S" || err "SKILL.md lost: $ph"; done
 w=$(wc -w < "$S"); [ "$w" -le 1400 ] || err "SKILL.md weight $w words > 1400"
 d=$(sed -n '/^description:/p' "$S" | wc -w); [ "$d" -le 90 ] || err "SKILL.md description is $d words (> 90) — it is loaded in every session"
 J=$P/skills/prediction-protocol/references/journal.md
 for ph in 'contract=1' 'exit=N' 'stdout==' 'stdout~=' 'stdout-in=' 'lines=N' 'http=NNN' 'count=N' 'REFUTED.md' 'predictions:' 'insufficient' 'redaction:' 'gated:' 'ungated' 'gate: seen' '--session-id' 'state-tamper'; do grep -qF -- "$ph" "$J" || err "journal.md lost: $ph"; done
 H=$P/skills/prediction-protocol/references/hook-engineering.md
-for ph in 'exit 1' 'timeout' 'agent_id' 'CLAUDE_CODE_ENTRYPOINT' 'LC_ALL=C' 'PowerShell' 'allow' 'synthetic stdin' 'control byte' 'watchdog' 'hook-seen' 'CLAUDE_ENV_FILE'; do grep -qF -- "$ph" "$H" || err "hook-engineering.md lost: $ph"; done
+for ph in 'exit 1' 'timeout' 'agent_id' 'CLAUDE_CODE_ENTRYPOINT' 'LC_ALL=C' 'PowerShell' 'allow' 'synthetic stdin' 'control byte' 'watchdog' 'hook-seen' 'CLAUDE_ENV_FILE' 'permission_mode' 'transcript_path' 'permission-mode'; do grep -qF -- "$ph" "$H" || err "hook-engineering.md lost: $ph"; done
 # house hygiene
 grep -rnE '/home/[a-z]+/' $P README.md README.ru.md CHANGELOG.md CLAUDE.md scripts .github 2>/dev/null | grep -v 'tests/corpus' >/dev/null && err "personal absolute path in a tracked file"
 grep -q 'claude plugin validate plugins/prediction-protocol' README.md && grep -q 'claude plugin validate plugins/prediction-protocol' README.ru.md && grep -q 'claude plugin validate plugins/prediction-protocol' CLAUDE.md || err "docs lost the correct validate command"
 grep -q 'permissions:' .github/workflows/check.yml || err "check.yml has no permissions block"
+grep -q '^| auto' README.md && grep -q '^| auto' README.ru.md || err "README pair lost the auto-mode row"
 # README pair parity (headings)
 diff <(grep -E '^#{1,3} ' README.md | sed -E 's/[^#]//g') <(grep -E '^#{1,3} ' README.ru.md | sed -E 's/[^#]//g') >/dev/null || err "README.md / README.ru.md heading structure differs"
 [ "$fail" = 0 ] && echo "lint: OK" || exit 1

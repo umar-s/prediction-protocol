@@ -8,7 +8,7 @@ Bash` and with `--dangerously-skip-permissions`. Re-run
 | hook output | effect |
 |---|---|
 | exit 0 + `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":…}}` | blocked; the reason is shown to the model |
-| exit 0 + `permissionDecision: ask` | interactive: the permission prompt shows the reason; headless: blocked (nobody to answer) |
+| exit 0 + `permissionDecision: ask` | interactive: the permission prompt shows the reason **and stops on the human even in auto mode** (observed 2.1.239, 2026-08-22 — the classifier does not answer a hook's ask); headless: blocked (nobody to answer) |
 | exit 2 + stderr | blocked; stderr shown to the model |
 | exit 1 + stderr | **the command runs** |
 | exit 0 + invalid JSON | **the command runs** |
@@ -26,8 +26,10 @@ in the JSON (an unescaped 0x1b is invalid JSON — the command runs), and a
 deny that blocks by BOTH channels: deny JSON on stdout and the reason on
 stderr with exit 2. Decisions compose across hooks as most-restrictive-wins
 (`deny` > `defer` > `ask` > `allow`); this gate never emits `allow` — with a
-receipt it answers `ask` (interactive) or stays silent (headless), so the
-human click on a one-way door is never removed by a hook.
+receipt it answers `ask` (interactive) or stays silent (headless, and in a
+delegated session — auto mode, `dontAsk`, `bypassPermissions`), so the human
+click on a one-way door is never removed by a hook where a human is answering,
+and never forced where the human chose a classifier instead.
 
 ## What arrives on stdin
 
@@ -35,8 +37,15 @@ human click on a one-way door is never removed by a hook.
 `hook_event_name`, `tool_name`, `tool_input` (`command`, `description` for
 Bash), `tool_use_id`; for a call made by a subagent also `agent_id` and
 `agent_type` — session hooks **do** fire for subagent tool calls.
-`permission_mode` reads `default` even under `--dangerously-skip-permissions`,
-so it is not a mode signal.
+`permission_mode` carries `acceptEdits`, `dontAsk` and `bypassPermissions`
+as set by `--permission-mode`, but reads `default` under the bare
+`--dangerously-skip-permissions` flag **and under auto mode** (verified
+2.1.240), so on its own it is not a mode signal. The platform's own record is:
+the session transcript at `transcript_path` carries
+`{"type":"permission-mode","permissionMode":"auto"}` lines (and
+`permissionMode` on `user` entries), appended on every toggle — the last
+marker is the current mode. `pp_delegated` reads both; an unreadable
+transcript means "not delegated" (the failure is a visible prompt).
 
 ## Environment of the hook process
 
@@ -46,7 +55,8 @@ plugin hooks (also usable as a placeholder inside the `command` string).
 The gate derives its context from these: `agent_id` present → subagent;
 entrypoint starting with `sdk` → headless; otherwise interactive (unknown
 entrypoints are treated as interactive — a visible prompt is the safer
-failure). No mode flag is exchanged between plugins.
+failure); a delegated permission mode turns the interactive `ask` rows silent
+and leaves every deny in place. No mode flag is exchanged between plugins.
 
 ## Checklist for any hook in this line
 

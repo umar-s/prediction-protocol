@@ -77,9 +77,11 @@ print(d.get("session_id") or "")
 print(d.get("agent_id") or "")
 print(d.get("tool_name") or "")
 print(d.get("tool_use_id") or "")
+print(d.get("permission_mode") or "")
+print(d.get("transcript_path") or "")
 print(base64.b64encode(cmd.encode()).decode())
 '; }
-parse_jq() { jq -r '[(.session_id//""), (.agent_id//""), (.tool_name//""), (.tool_use_id//""), ((.tool_input.command//"")|@base64)] | .[]'; }
+parse_jq() { jq -r '[(.session_id//""), (.agent_id//""), (.tool_name//""), (.tool_use_id//""), (.permission_mode//""), (.transcript_path//""), ((.tool_input.command//"")|@base64)] | .[]'; }
 fields=""
 command -v python3 >/dev/null 2>&1 && fields="$(printf '%s' "$input" | parse_py 2>/dev/null)" || fields=""
 [ -n "$fields" ] || { command -v jq >/dev/null 2>&1 && fields="$(printf '%s' "$input" | parse_jq 2>/dev/null)" || fields=""; }
@@ -88,7 +90,9 @@ session_id="$(printf '%s\n' "$fields" | sed -n 1p)"
 agent_id="$(printf '%s\n' "$fields" | sed -n 2p)"
 tool_name="$(printf '%s\n' "$fields" | sed -n 3p)"
 tool_use_id="$(printf '%s\n' "$fields" | sed -n 4p)"
-command="$(printf '%s\n' "$fields" | sed -n 5p | base64 -d 2>/dev/null)" || command=""
+permission_mode="$(printf '%s\n' "$fields" | sed -n 5p)"
+transcript_path="$(printf '%s\n' "$fields" | sed -n 6p)"
+command="$(printf '%s\n' "$fields" | sed -n 7p | base64 -d 2>/dev/null)" || command=""
 [ "$tool_name" = "Bash" ] || pass
 [ -n "$command" ] || pass
 
@@ -111,6 +115,7 @@ fi
 [ "$state_broken" = 0 ] || deny "\`$CLS\` is a one-way action and this session's protocol state exists but cannot be read ($sdir/state) — failing closed. Fix the permissions or run $predict on again."
 
 mode="$(pp_mode "$agent_id")"
+delegated="$(pp_delegated "$permission_mode" "$transcript_path")"   # 1 = auto / dontAsk / bypassPermissions: the human chose a classifier or no prompts; an ask would stop on nobody
 cmd_norm="$(pp_norm "$command")"
 q="$(printf '%s' "$command" | sed "s/'/'\\\\''/g")"
 
@@ -119,6 +124,7 @@ if [ "$active" != 1 ]; then
   case "$mode" in
     headless) pass ;;                                 # the runner's permissions decide; a subagent in -p has nobody to ask either
     *) [ "${PP_ENTRYPOINT:-${CLAUDE_CODE_ENTRYPOINT:-cli}}" = cli ] || pass
+       [ "$delegated" = 0 ] || pass                    # delegated session: the platform decides, as the runner's permissions do in headless
        ask "\`$CLS\` is a one-way action and this session is not under the prediction protocol. Approve to run it as-is, or put the session under the protocol first: $predict on <journal-name> — then every one-way action needs a receipt ($predict open …)." ;;
   esac
 fi
@@ -177,5 +183,6 @@ printf '%s %s\n' "$(pp_now)" "${tool_use_id:-?}" > "$sdir/receipts/$match/consum
 hyp="$(cat "$sdir/receipts/$match/hypothesis")"; obs="$(cat "$sdir/receipts/$match/observe")"; exp="$(cat "$sdir/receipts/$match/expect")"
 case "$mode" in
   headless) pass ;;
-  *) ask "predict $match — hypothesis: $hyp · observe: \`$obs\` → expect $exp (falsifier: $(pp_falsifier "$exp")). Approve to fire \`$cmd_norm\`; afterwards: $predict close $match. If you decline: $predict withdraw $match --reason 'not fired'." ;;
+  *) [ "$delegated" = 0 ] || pass                      # delegated session: the receipt is the witness, there is no one to show it to
+     ask "predict $match — hypothesis: $hyp · observe: \`$obs\` → expect $exp (falsifier: $(pp_falsifier "$exp")). Approve to fire \`$cmd_norm\`; afterwards: $predict close $match. If you decline: $predict withdraw $match --reason 'not fired'." ;;
 esac

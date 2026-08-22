@@ -21,7 +21,7 @@ one is an intention.
 ## How it works
 
 ```
-predict on DEV-512                      # the session is under the protocol; selftest prints predict-gate: active v1.0.2
+predict on DEV-512                      # the session is under the protocol; selftest prints predict-gate: active v1.0.3
 predict open --action 'alembic upgrade head' \
   --hypothesis '0042 adds the index without touching rows' \
   --observe "psql -tAc 'select count(*) from orders'" --expect 'count=10422'
@@ -34,13 +34,16 @@ Without a receipt the command is **denied** — deny JSON on stdout and the
 reason on stderr with exit 2, so a defect in one channel never becomes an
 allow — with the exact `predict open …` recipe in the reason. Outside the protocol (no `predict on`) a one-way
 command **asks** — the owner's "ask only at the irreversible" as a mechanism
-rather than a prose rule. In headless runs the gate stays silent outside the
-protocol and denies inside it. Subagents never open one-way doors: they are
+rather than a prose rule. In headless runs and in a delegated session (auto
+mode, `dontAsk`, `bypassPermissions`) the gate stays silent outside the
+protocol and denies inside it — a hook's `ask` stops on the human even in auto
+mode, and the human chose a classifier instead. Subagents never open one-way doors: they are
 told to report the command as a finding.
 
 | | outside the protocol | under it, no receipt | receipt matches |
 |---|---|---|---|
 | interactive | ask | deny + recipe | ask, prediction in the prompt |
+| auto mode / `dontAsk` / `bypassPermissions` | silent | deny + recipe | silent |
 | subagent | ask | deny: report as a finding | deny |
 | headless (`claude -p`) | silent | deny + recipe | silent |
 

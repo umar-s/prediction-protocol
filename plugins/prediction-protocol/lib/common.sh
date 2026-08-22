@@ -3,7 +3,7 @@
 # Session state lives OUTSIDE the repository, keyed by the Claude Code session
 # id, and is written only by bin/predict (plus the hook's `consumed` mark).
 export LC_ALL=C
-PP_VERSION="1.0.2"                      # lint: must equal .claude-plugin/plugin.json
+PP_VERSION="1.0.3"                      # lint: must equal .claude-plugin/plugin.json
 PP_CONTRACT=1                           # journal header contract number
 PP_TTL="${PP_TTL:-1800}"                # receipt lifetime, seconds
 PP_K="${PP_K:-20}"                      # report: below this n the rate is "insufficient"
@@ -64,6 +64,20 @@ pp_mode() {   # $1 = agent_id (may be empty)
   if [ -n "$1" ]; then printf 'subagent'; return; fi
   local e="${PP_ENTRYPOINT:-${CLAUDE_CODE_ENTRYPOINT:-cli}}"
   case "$e" in sdk*|headless*) printf 'headless' ;; *) printf 'interactive' ;; esac
+}
+# A delegated session is one where the human chose not to be asked: auto mode
+# (a classifier answers), dontAsk, bypassPermissions. Two sources, either
+# suffices: the stdin field `permission_mode` (auto arrives as `default` there,
+# verified 2.1.240) and the platform's own record — the last
+# `"permissionMode":"…"` marker in the session transcript, whose path arrives
+# on stdin. Unreadable or absent → 0: the failure is a visible prompt.
+pp_delegated() {   # $1 = permission_mode from stdin, $2 = transcript_path; prints 0|1
+  local m="$1"
+  if [ -n "${2:-}" ] && [ -r "$2" ]; then
+    local t; t="$(tail -c 262144 "$2" 2>/dev/null | grep -o '"permissionMode":"[A-Za-z]*"' | tail -1 | sed 's/.*:"//; s/"$//')" || t=""
+    [ -n "$t" ] && m="$t"
+  fi
+  case "$m" in auto|dontAsk|bypassPermissions) printf '1' ;; *) printf '0' ;; esac
 }
 # built-in redaction — always applied to `actual`; gitleaks (ci/scan-text.sh) on top when present
 pp_redact() {

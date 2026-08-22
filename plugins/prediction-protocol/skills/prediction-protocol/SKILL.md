@@ -72,6 +72,7 @@ classified. Then:
 | context | outside the protocol | under it, no receipt | receipt matches this exact command |
 |---|---|---|---|
 | interactive | **ask** — a human answers at the irreversible | **deny** + the `predict open …` recipe | **ask**, with the prediction in the prompt |
+| auto mode, `dontAsk`, `bypassPermissions` | silent (delegated) | deny + recipe | silent |
 | subagent (`agent_id`) | ask | **deny**: report the command as a finding; do not write a receipt | deny — a subagent does not open one-way doors |
 | headless (`claude -p`) | silent — the runner's permissions decide | deny + recipe | silent pass |
 

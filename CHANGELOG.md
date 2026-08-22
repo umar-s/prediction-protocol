@@ -5,6 +5,33 @@ All notable changes to this plugin. The format follows
 [SemVer](https://semver.org/). The single source of the version is
 `plugins/prediction-protocol/.claude-plugin/plugin.json`.
 
+## [1.0.3] — 2026-08-22
+
+### Fixed
+- The gate's `ask` — outside the protocol, and with a matching receipt —
+  **stopped on the human even in auto mode**: the platform shows a hook's
+  `ask` as "Hook PreToolUse:Bash requires confirmation" and the classifier
+  does not answer it (observed on 2.1.239 in the first interactive session
+  with the plugin installed — the item 1.0.2 left "not yet observed"). For a
+  long autonomous task that is a stop at every force-push and merge. The gate
+  now recognises a **delegated** session — auto mode, `dontAsk`,
+  `bypassPermissions` — and treats it like headless: silent outside the
+  protocol (the platform's classifier decides), **deny + recipe** under the
+  protocol without a receipt (the witness is still required), silent pass with
+  one. Every deny is unchanged; `default` and `acceptEdits` still ask.
+- Detection: auto mode arrives on stdin as `permission_mode: "default"`
+  (verified 2.1.240 — `acceptEdits`, `dontAsk`, `bypassPermissions` arrive as
+  set), so `pp_delegated` also reads the platform's own record: the last
+  `"permissionMode":"…"` marker in the session transcript (`transcript_path`
+  from stdin; `{"type":"permission-mode",…}` lines are appended on every
+  toggle). An unreadable transcript means "not delegated" — the failure is a
+  visible prompt, never a silent pass.
+- `tests/platform-probe.sh` now also checks that `permission_mode` arrives
+  under `--permission-mode dontAsk` (the `-p` path cannot reach auto mode).
+
+A running session keeps the plugin version it started with (hooks and the
+exported `PREDICT`): the fix applies to sessions started after the update.
+
 ## [1.0.2] — 2026-08-22
 
 ### Fixed
@@ -114,6 +141,7 @@ All notable changes to this plugin. The format follows
   in an **interactive** session is asserted from the documentation, not yet
   observed — first interactive run to confirm.
 
+[1.0.3]: https://github.com/umar-s/prediction-protocol/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/umar-s/prediction-protocol/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/umar-s/prediction-protocol/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/umar-s/prediction-protocol/releases/tag/v1.0.0

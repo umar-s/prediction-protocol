@@ -20,6 +20,7 @@ case "$mode" in
   exit1) echo "PROBE-EXIT1" >&2; exit 1 ;;
   badjson) echo '{"hookSpecificOutput": {"permissionDecision": "deny"'; ;;
   sleep) sleep 8 ;;
+  log) cat > "$(dirname "$0")/STDIN" ;;
 esac
 exit 0
 G
@@ -34,5 +35,9 @@ expect() { # mode expected-substring
 fail=0
 expect deny BLOCKED; expect ask BLOCKED; expect exit2 BLOCKED
 expect exit1 PROBE-OK-42; expect badjson PROBE-OK-42; expect sleep PROBE-OK-42
+# the mode signal: permission_mode arrives as set for dontAsk (auto mode reads default here and is read from the transcript instead)
+echo log > .claude/MODE; timeout 120 claude -p "$P" --permission-mode dontAsk --model "${PROBE_MODEL:-claude-haiku-4-5-20251001}" --allowedTools Bash >/dev/null 2>&1
+pm="$(python3 -c 'import json;print(json.load(open(".claude/STDIN")).get("permission_mode"))' 2>/dev/null)"
+if [ "$pm" = dontAsk ]; then echo "ok    permission_mode=dontAsk arrives on stdin"; else echo "FAIL  permission_mode under --permission-mode dontAsk = '$pm'"; fail=1; fi
 echo "platform-probe: the last three rows RAN — the platform is fail-open on a broken hook; the gate's own trap/deadline is what keeps it closed."
 exit $fail
