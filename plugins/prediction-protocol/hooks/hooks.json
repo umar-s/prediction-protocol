@@ -1,5 +1,5 @@
 {
-  "description": "prediction-protocol — PreToolUse gate on the Bash tool: a one-way command (migration, force-push, merge, deploy, restart, remote exec, mutating HTTP, grants/secrets, recursive delete) is denied unless the session holds an open receipt for that exact command; outside the protocol it asks. Fail-closed: any gate error or deadline overrun denies.",
+  "description": "prediction-protocol — PreToolUse gate on the Bash tool: a one-way command (migration, force-push, merge, deploy, restart, remote exec, mutating HTTP, grants/secrets, recursive delete) is denied unless the session holds an open receipt for that exact command; outside the protocol it asks. Fail-closed: any gate error or deadline overrun denies. A SessionStart hook exports PREDICT=<plugin>/bin/predict into the session so consumers can call \"${PREDICT:?}\".",
   "hooks": {
     "PreToolUse": [
       {
@@ -10,6 +10,18 @@
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/predict-gate.sh\"",
             "timeout": 15,
             "statusMessage": "prediction-protocol: checking the receipt"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-env.sh\"",
+            "timeout": 5
           }
         ]
       }

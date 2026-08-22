@@ -22,12 +22,16 @@ ACTUAL · VERDICT      written by `predict close`, never by you
 
 ## Resolve the plugin root once
 
-The CLI and the hook live in the installed plugin. Resolve the path in one
-bash step and use it verbatim afterwards — the Read tool and your memory do
-not expand `${…}`:
+The plugin's SessionStart hook exports `PREDICT` — the absolute path of
+`bin/predict` — into the session's Bash environment, so any skill can call
+it without knowing where the plugin is installed; an unset `PREDICT` is an
+honest "plugin not installed". Resolve once in a bash step and use the
+resolved value afterwards — the Read tool and your memory do not expand
+`${…}`:
 
 ```bash
-ROOT="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/marketplaces/devpowers/plugins/prediction-protocol}"; P="$ROOT/bin/predict"; "$P" version
+P="${PREDICT:-${CLAUDE_PLUGIN_ROOT:-}/bin/predict}"; [ -x "$P" ] && "$P" version || echo "predict-gate: absent (PREDICT unset — prediction-protocol not installed)"
+ROOT="$(dirname "$(dirname "$P")")"     # for the references below
 ```
 
 Every deny reason also carries the absolute path to `predict`, so a session

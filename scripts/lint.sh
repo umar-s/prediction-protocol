@@ -21,7 +21,7 @@ grep -nE '\b(curl|wget|nc|ssh)\b' $P/hooks/predict-gate.sh $P/lib/common.sh | gr
 # SKILL contract: thin, names the three commands, the halt rule, the scope rule, platform limits
 S=$P/skills/prediction-protocol/SKILL.md
 for ph in 'predict on' 'predict open' 'predict close' 'predict ack' 'predict report' 'predict off' 'MISS' 'INCONCLUSIVE' 'Bash tool only' 'Wrapping is a bypass' 'never writes' 'advisory'; do grep -q -- "$ph" "$S" || err "SKILL.md lost: $ph"; done
-grep -q 'CLAUDE_PLUGIN_ROOT' "$S" || err "SKILL.md must resolve the plugin root"
+grep -q 'PREDICT' "$S" || err "SKILL.md must name PREDICT"
 w=$(wc -w < "$S"); [ "$w" -le 1400 ] || err "SKILL.md weight $w words > 1400"
 J=$P/skills/prediction-protocol/references/journal.md
 for ph in 'contract=1' 'exit=N' 'stdout==' 'stdout~=' 'stdout-in=' 'lines=N' 'http=NNN' 'count=N' 'REFUTED.md' 'predictions:' 'insufficient' 'redaction:'; do grep -q -- "$ph" "$J" || err "journal.md lost: $ph"; done

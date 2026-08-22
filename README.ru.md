@@ -87,6 +87,7 @@ plugins/prediction-protocol/
   skills/prediction-protocol/references/journal.md          # утверждения, формат записи, REFUTED.md, строка report, lint
   skills/prediction-protocol/references/hook-engineering.md # факты платформы + чеклист для любого хука линейки
   hooks/hooks.json · hooks/predict-gate.sh   # гейт (matcher "Bash", timeout 15)
+  hooks/session-env.sh                       # SessionStart: экспортирует PREDICT=<plugin>/bin/predict потребителям
   bin/predict                                # on | off | status | open | close | ack | retry | withdraw | report | lint | classify | selftest
   lib/classify.sh · lib/common.sh            # классификатор; состояние, утверждения, редакция
   tests/run.sh · tests/classify-corpus.sh · tests/platform-probe.sh · tests/corpus/

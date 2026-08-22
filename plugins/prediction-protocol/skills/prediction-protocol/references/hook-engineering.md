@@ -65,3 +65,6 @@ failure). No mode flag is exchanged between plugins.
   with `tests/platform-probe.sh` before a release.
 - `PostToolUse` cannot block or undo — grading lives in the CLI, not in a
   hook.
+- `SessionStart` may append `export …` lines to `$CLAUDE_ENV_FILE`; they
+  become the preamble of every later Bash call. That is how `PREDICT`
+  reaches consumers (`hooks/session-env.sh`) — side-effect only, exit 0 always.

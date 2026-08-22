@@ -8,6 +8,9 @@ All notable changes to this plugin. The format follows
 ## [1.0.0] — 2026-08-22
 
 ### Added
+- `hooks/session-env.sh` — a `SessionStart` hook that exports
+  `PREDICT=<plugin>/bin/predict` through `CLAUDE_ENV_FILE`, so consumers call
+  `"${PREDICT:?}" on …` and an unset variable reads as "not installed".
 - `hooks/predict-gate.sh` — a `PreToolUse` gate on the `Bash` tool. Classifies
   the command; outside the protocol a one-way command asks; under it a one-way
   command is denied unless an open, unexpired, unconsumed receipt names that

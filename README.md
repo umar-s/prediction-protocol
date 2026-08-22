@@ -89,6 +89,7 @@ plugins/prediction-protocol/
   skills/prediction-protocol/references/journal.md          # claims, entry format, REFUTED.md, report line, lint
   skills/prediction-protocol/references/hook-engineering.md # platform facts + checklist for any hook in the line
   hooks/hooks.json · hooks/predict-gate.sh   # the gate (matcher "Bash", timeout 15)
+  hooks/session-env.sh                       # SessionStart: exports PREDICT=<plugin>/bin/predict for consumers
   bin/predict                                # on | off | status | open | close | ack | retry | withdraw | report | lint | classify | selftest
   lib/classify.sh · lib/common.sh            # the classifier; state, claims, redaction
   tests/run.sh · tests/classify-corpus.sh · tests/platform-probe.sh · tests/corpus/

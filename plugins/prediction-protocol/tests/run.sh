@@ -136,5 +136,10 @@ OUT="$(stdin "$S" 'git push --force origin main' | PP_NOW=notanumber bash "$gate
 grep -q '"allow"' "$gate" && bad "the word allow appears in the hook" || ok
 "$predict" selftest >/dev/null; check "selftest rc0" '[ $? -eq 0 ]'
 
+echo "# 13 session-env hook"
+E="$T/env"; : > "$E"; CLAUDE_ENV_FILE="$E" CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; check "SessionStart exports PREDICT" 'grep -q "^export PREDICT=.*bin/predict$" "$E"'
+( . "$E"; [ -x "$PREDICT" ] ) && ok || bad "exported PREDICT is executable"
+CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; check "session-env without CLAUDE_ENV_FILE exits 0" '[ $? -eq 0 ]'
+
 echo "tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
