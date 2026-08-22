@@ -5,6 +5,27 @@ All notable changes to this plugin. The format follows
 [SemVer](https://semver.org/). The single source of the version is
 `plugins/prediction-protocol/.claude-plugin/plugin.json`.
 
+## [1.0.2] — 2026-08-22
+
+### Fixed
+- A destructive receipt closed without ever passing the gate now writes
+  `- gated: no (close-without-gate)` into the journal (it used to write the
+  advisory wording, so `report`'s `ungated` counter and the lint warning could
+  never fire — the line was only ever produced by a hand-written test fixture).
+  An advisory receipt writes `- gated: no (advisory)`.
+- `hooks/predict-state-guard.sh` inspected the whole hook input, so a `Write`
+  of a document that merely *mentions* `prediction-protocol/sessions/` was
+  denied as state tampering. It now inspects only `file_path` /
+  `notebook_path`. Found while writing loop-foundry's `predictions.md`.
+
+### Added
+- Under `predict on … --loop`, `ack`, `withdraw` and `off` refuse to run when
+  `CLAUDE_CODE_SESSION_ID` is set: in a loop they are the operator's acts
+  (from a plain shell as the runner user, with `PP_SESSION=<uuid>`), never the
+  executor session's — an executor that acknowledges its own miss is grading
+  its own homework. `--task` sessions are unchanged. Both found by the
+  loop-foundry 1.1.0 review panel.
+
 ## [1.0.1] — 2026-08-22
 
 ### Fixed
@@ -93,5 +114,6 @@ All notable changes to this plugin. The format follows
   in an **interactive** session is asserted from the documentation, not yet
   observed — first interactive run to confirm.
 
+[1.0.2]: https://github.com/umar-s/prediction-protocol/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/umar-s/prediction-protocol/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/umar-s/prediction-protocol/releases/tag/v1.0.0

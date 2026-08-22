@@ -14,6 +14,7 @@ grep -q "^## \[$v_json\]" CHANGELOG.md || err "CHANGELOG.md has no section for $
 grep -nwi 'allow' $P/hooks/predict-gate.sh $P/lib/common.sh $P/hooks/predict-state-guard.sh | grep -v ':[0-9]*:[[:space:]]*#' | grep -v 'never' >/dev/null && err "the word allow appears in a hook"
 grep -q '"matcher": "Bash"' $P/hooks/hooks.json || err "hooks.json: the gate matcher must be the literal Bash"
 grep -q '"matcher": "Edit|Write|MultiEdit|NotebookEdit"' $P/hooks/hooks.json || err "hooks.json lost the state guard"
+grep -q 'file_path|notebook_path' $P/hooks/predict-state-guard.sh && grep -q 'BASH_REMATCH' $P/hooks/predict-state-guard.sh || err "state guard must inspect the target path, not the whole input"
 grep -q '"PostToolUse"' $P/hooks/hooks.json && grep -q 'predict-fired.sh' $P/hooks/hooks.json || err "hooks.json lost the PostToolUse fired hook"
 grep -q '"SessionStart"' $P/hooks/hooks.json && grep -q 'session-env.sh' $P/hooks/hooks.json || err "hooks.json lost the SessionStart env hook"
 grep -q '"timeout": 15' $P/hooks/hooks.json || err "hooks.json must set an explicit timeout on the gate"
@@ -38,6 +39,8 @@ grep -q 'pp_has_secret_shape "$f" && die' $P/bin/predict || err "open lost the s
 grep -q 'was released to the gate but its action never ran' $P/bin/predict || err "close lost the fired requirement"
 grep -q 'retry is for an INCONCLUSIVE receipt' $P/bin/predict || err "retry lost its INCONCLUSIVE-only rule"
 grep -q -- '--where' $P/bin/predict || err "ack lost --where"
+for v in ack withdraw off; do grep -q "loop_operator_only $v" $P/bin/predict || err "$v lost the loop operator-only rule"; done
+grep -q 'gated="no (close-without-gate)"' $P/bin/predict || err "close lost the close-without-gate journal line"
 grep -q 'with_lock' $P/bin/predict || err "journal mutations lost the lock"
 grep -q 'umask 077' $P/bin/predict || err "CLI lost umask 077"
 grep -q 'pp_valid_id' $P/bin/predict && grep -q 'pp_valid_session' $P/bin/predict || err "CLI lost id/session validation"

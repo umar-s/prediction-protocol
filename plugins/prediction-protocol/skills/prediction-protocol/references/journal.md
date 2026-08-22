@@ -66,7 +66,7 @@ destructive HIT equals its baseline — the action changed nothing observable.
 - action: `…`                       # redacted: a token in a header never reaches the repo
 - observe: `…` → expect `…` (falsifier: …)
 - actual: `exit=N stdout=…` [— confirmed ×2 (run 2: `…`) | — unstable: …] · redaction: builtin[+gitleaks]
-- gated: yes <tool_use_id> · fired <utc> | no (advisory or never gated) | no (close-without-gate) | no (retry)
+- gated: yes <tool_use_id> · fired <utc> | no (advisory) | no (close-without-gate) | no (retry)
 - baseline: `…`                     # only with --baseline
 - retry-of: <id>                    # only on a retry
 - graded-by: predict v<ver> @ <utc> · session <session8>

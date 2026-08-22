@@ -139,6 +139,8 @@ and one-way commands ask instead of requiring receipts until `predict on`.
   the paths it names — it is the one thing here that outlives a session.
 - Headless runners: export one `PP_SESSION` around both `predict on` and
   `claude -p --session-id <uuid>` so the CLI and the hook key the same state.
+  Under `on --loop`, `ack`, `withdraw` and `off` refuse to run inside a
+  Claude session: in a loop they are the operator's acts, from a plain shell.
 - Platform facts and the checklist for any hook in this line:
   `Read "$ROOT/skills/prediction-protocol/references/hook-engineering.md"`
   (only when editing or debugging the hook).

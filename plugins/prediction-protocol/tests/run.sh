@@ -164,6 +164,23 @@ R="$("$predict" report)"; check "report line shape incl. ungated and lint" 'prin
 RJ="$("$predict" report --json)"; check "report json: n = hit+miss+inconclusive, withdrawn/superseded excluded" 'printf "%s" "$RJ" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"n\"]==d[\"hit\"]+d[\"miss\"]+d[\"inconclusive\"]; assert d[\"withdrawn\"]>=3; assert d[\"inconclusive\"]==0, d; assert d[\"lint_failures\"]==0"'
 cp docs/evidence/DEV-1.md "$T/bad2.md"; printf '%s\n- graded-by: x\n\n' "${h/contract=1/contract=2}" >> "$T/bad2.md"; "$predict" report --journal "$T/bad2.md" > "$T/r.out"; check "report runs lint and fails on findings" '[ $? -eq 1 ] && grep -q "lint=FAIL(" "$T/r.out"'
 
+echo "# 10b loops: close-without-gate is counted, ack/withdraw/off are the operator's"
+PP_SESSION="lp-1" "$predict" on lp --loop >/dev/null
+G="$(PP_SESSION="lp-1" "$predict" open --action 'git push --force origin main' --hypothesis h --observe 'echo 1' --expect count=1 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION="lp-1" "$predict" close "$G" >/dev/null; check "destructive receipt closed without the gate → close-without-gate line (CLI path)" 'grep -q "^- gated: no (close-without-gate)" loops/evidence/lp.md'
+PP_SESSION="lp-1" "$predict" report --json > "$T/lp.json"; check "report counts it as ungated" 'grep -q "\"ungated\":1" "$T/lp.json"'
+M="$(PP_SESSION="lp-1" "$predict" open --scope advisory --action x --hypothesis h --observe 'echo 1' --expect count=2 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION="lp-1" "$predict" close "$M" >/dev/null 2>&1; check "advisory receipt without the gate → gated: no (advisory), verdict MISS" 'grep -q "^- gated: no (advisory)" loops/evidence/lp.md && [ "$(PP_SESSION=lp-1 "$predict" status --json | sed -n "s/.*\"halted\":\"\([^\"]*\)\".*/\1/p")" = "$M" ]'
+PP_SESSION="lp-1" CLAUDE_CODE_SESSION_ID=exec-1 "$predict" ack "$M" --refuted b --where w > "$T/lpa.out" 2>&1; check "loop: ack inside a Claude session is refused" '[ $? -eq 2 ] && grep -q "operator" "$T/lpa.out"'
+PP_SESSION="lp-1" CLAUDE_CODE_SESSION_ID=exec-1 "$predict" withdraw "$M" --reason r >/dev/null 2>&1; check "loop: withdraw inside a Claude session is refused" '[ $? -eq 2 ]'
+PP_SESSION="lp-1" CLAUDE_CODE_SESSION_ID=exec-1 "$predict" off --reason r >/dev/null 2>&1; check "loop: off inside a Claude session is refused" '[ $? -eq 2 ]'
+PP_SESSION="lp-1" "$predict" status >/dev/null 2>&1; check "loop: still halted after the refused ack" '[ $? -eq 1 ]'
+PP_SESSION="lp-1" "$predict" ack "$M" --refuted b --where w >/dev/null; check "loop: ack from a plain shell (the operator) works" '[ $? -eq 0 ]'
+PP_SESSION="tk-1" "$predict" on TK-1 --task >/dev/null
+N="$(PP_SESSION="tk-1" "$predict" open --scope advisory --action x --hypothesis h --observe 'echo 1' --expect count=2 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION="tk-1" "$predict" close "$N" >/dev/null 2>&1
+PP_SESSION="tk-1" CLAUDE_CODE_SESSION_ID=exec-1 "$predict" ack "$N" --refuted b --where w >/dev/null; check "task: ack inside a Claude session is the model's act (unchanged)" '[ $? -eq 0 ]'
+
 echo "# 11 ids and journals"
 PP_SESSION="nightly-2026-08-21" "$predict" on nightly --loop >/dev/null; PP_SESSION="nightly-2026-08-22" "$predict" on nightly --loop >/dev/null
 A="$(PP_SESSION="nightly-2026-08-21" "$predict" open --scope advisory --action x --hypothesis h --observe 'echo 1' --expect count=1 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
@@ -217,6 +234,9 @@ CLAUDE_ENV_FILE="$E" CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; che
 CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; check "session-env without CLAUDE_ENV_FILE exits 0" '[ $? -eq 0 ]'
 OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/%s/state","content":"x"}}' "$PP_STATE_DIR" "$S" | bash "$guard" 2>/dev/null)"; GRC=$?; check "Write into the state dir → deny" 'is_deny'
 OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x"}}' | bash "$guard")"; GRC=$?; check "Write elsewhere → silent" 'is_silent'
+OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/doc.md","content":"state lives under ~/.local/state/prediction-protocol/sessions/<uuid>/ and %s/sessions/x"}}' "$PP_STATE_DIR" | bash "$guard")"; GRC=$?; check "Write elsewhere whose CONTENT names the state dir → silent (path, not content)" 'is_silent'
+OUT="$(printf '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"%s/sessions/%s/state.ipynb"}}' "$PP_STATE_DIR" "$S" | bash "$guard" 2>/dev/null)"; GRC=$?; check "NotebookEdit into the state dir → deny" 'is_deny'
+OUT="$(printf '{"tool_name":"MultiEdit","tool_input":{"edits":[{"old_string":"a","new_string":"b"}],"file_path":"%s/sessions/%s/state"}}' "$PP_STATE_DIR" "$S" | bash "$guard" 2>/dev/null)"; GRC=$?; check "MultiEdit with file_path after other keys → deny" 'is_deny'
 echo '{not json' | bash "$fired"; check "fired hook never fails" '[ $? -eq 0 ]'
 
 echo "tests: $pass passed, $fail failed"

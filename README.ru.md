@@ -20,7 +20,7 @@ CLI `predict` открывает receipt, сам исполняет измере
 ## Как это работает
 
 ```
-predict on DEV-512                      # сессия под протоколом; selftest печатает predict-gate: active v1.0.1
+predict on DEV-512                      # сессия под протоколом; selftest печатает predict-gate: active v1.0.2
 predict open --action 'alembic upgrade head' \
   --hypothesis '0042 добавляет индекс, не трогая строки' \
   --observe "psql -tAc 'select count(*) from orders'" --expect 'count=10422'
@@ -134,8 +134,11 @@ macOS в 1.0 не тестировался (сьют идёт только на 
   строки печатают `predict-gate: absent`.
 - **loop-foundry** — runner экспортирует один `PP_SESSION=<uuid>`, выполняет
   `predict on <loop> --loop`, затем `claude -p --session-id <uuid>`; `predict
-  report --json` вливается в запись тика как второй сигнал на лестнице shadow
-  → gated → autonomous, halt — стоп, исполняемый хуком.
+  report --json` снимается до и после executor'а, оба снимка попадают в
+  запись тика (журнал лупа накопительный, тик — разность) как второй сигнал
+  на лестнице shadow → gated → autonomous. Halt — стоп, исполняемый хуком, а
+  под `--loop` `ack`, `withdraw` и `off` отказываются работать внутри
+  Claude-сессии — это действия оператора.
 
 ## Проверки
 

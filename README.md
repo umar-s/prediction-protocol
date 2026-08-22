@@ -21,7 +21,7 @@ one is an intention.
 ## How it works
 
 ```
-predict on DEV-512                      # the session is under the protocol; selftest prints predict-gate: active v1.0.1
+predict on DEV-512                      # the session is under the protocol; selftest prints predict-gate: active v1.0.2
 predict open --action 'alembic upgrade head' \
   --hypothesis '0042 adds the index without touching rows' \
   --observe "psql -tAc 'select count(*) from orders'" --expect 'count=10422'
@@ -133,8 +133,11 @@ declaration.
   the lines print `predict-gate: absent`.
 - **loop-foundry** — the runner exports one `PP_SESSION=<uuid>`, runs
   `predict on <loop> --loop`, then `claude -p --session-id <uuid>`; `predict
-  report --json` is merged into the tick record as a second signal on the
-  shadow → gated → autonomous ladder, and a halt is a hook-enforced stop.
+  report --json` is snapshotted before and after the executor and both land
+  in the tick record (the loop journal is cumulative, so the tick is the
+  difference), a second signal on the shadow → gated → autonomous ladder. A
+  halt is a hook-enforced stop, and under `--loop` `ack`, `withdraw` and
+  `off` refuse to run inside a Claude session — they are the operator's.
 
 ## Checks
 

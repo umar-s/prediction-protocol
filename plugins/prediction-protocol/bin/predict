@@ -40,6 +40,10 @@ session_id() {
 }
 SID=""; SID8=""; SDIR=""; STATE=""
 load_session() { SID="$(session_id)" || exit 2; SID8="$(pp_sid8 "$SID")"; SDIR="$(pp_session_dir "$SID")"; STATE="$SDIR/state"; }
+loop_operator_only() {   # $1 = verb — under `on --loop`, ack / withdraw / off are the operator's acts, never the executor session's
+  [ "$(pp_kv_get "$STATE" kind 2>/dev/null || true)" = loop ] || return 0
+  [ -z "${CLAUDE_CODE_SESSION_ID:-}" ] || die "$1 in a loop is the operator's act — run it from a shell outside a Claude session, as the runner user: PP_SESSION=$SID predict $1 …"
+}
 require_active() { [ "$(pp_kv_get "$STATE" active 2>/dev/null || true)" = 1 ] || die "this session is not under the protocol — run: predict on <journal> [--task | --loop]"; }
 journal_path() { pp_kv_get "$STATE" journal_path; }
 root_dir() { pp_kv_get "$STATE" root; }
@@ -126,7 +130,7 @@ cmd_off() {
   local reason=""
   while [ $# -gt 0 ]; do case "$1" in --reason) need_val "$@"; oneline --reason "$2"; reason="$2"; shift 2 ;; *) die "off: unknown option $1" ;; esac; done
   [ -n "$reason" ] || die "off: --reason '…' is required — a bypass without a reason is not a bypass"
-  load_session; require_active
+  load_session; require_active; loop_operator_only off
   local jp id; jp="$(journal_path)"; journal_init "$jp" "$(pp_kv_get "$STATE" journal)"; id="$(next_id)"
   journal_append "$(entry_header "$id" "$(pp_utc)" session bypass)
 - reason: $(jtext "$reason")
@@ -228,14 +232,14 @@ close_receipt() {   # id [retry-of]
   local id="$1" retry_of="${2:-}" d obs exp tmo scope w rc rc2 v v2 actual red conf="" jp gated
   d="$(rdir "$id")"; [ -d "$d" ] || die "no receipt $id in this session"
   [ -e "$d/closed" ] && die "receipt $id is already closed (verdict $(cat "$d/verdict"))"
-  local consumed; consumed="$(cat "$d/consumed" 2>/dev/null || true)"
+  local consumed; consumed="$(cat "$d/consumed" 2>/dev/null || true)"; scope="$(cat "$d/scope")"
   case "$consumed" in
-    "") gated="no (advisory or never gated)" ;;
+    "") if [ "$scope" = destructive ]; then gated="no (close-without-gate)"; else gated="no (advisory)"; fi ;;   # report counts the first as ungated
     *" retry"|*" close-without-gate") gated="no (${consumed##* })" ;;
     *) [ -e "$d/fired" ] || die "receipt $id was released to the gate but its action never ran (declined, or another hook denied it). If it did not run: predict withdraw $id --reason 'not fired'"
        gated="yes ${consumed##* } · fired $(cat "$d/fired")" ;;
   esac
-  obs="$(cat "$d/observe")"; exp="$(cat "$d/expect")"; tmo="$(cat "$d/timeout" 2>/dev/null || echo 60)"; scope="$(cat "$d/scope")"
+  obs="$(cat "$d/observe")"; exp="$(cat "$d/expect")"; tmo="$(cat "$d/timeout" 2>/dev/null || echo 60)"
   w="$(mktemp -d)" || die "mktemp"; PP_TMP="$w"
   rc="$(run_observe "$obs" "$tmo" "$w/out")"; v="$(grade "$exp" "$rc" "$w/out")"
   if [ "$v" = MISS ]; then    # a miss is confirmed by a second measurement; a flapping observable is INCONCLUSIVE
@@ -272,7 +276,7 @@ cmd_ack() {
   local id="${1:-}" text="" where=""; [ -n "$id" ] && shift
   while [ $# -gt 0 ]; do case "$1" in --refuted) need_val "$@"; oneline --refuted "$2"; text="$2"; shift 2 ;; --where) need_val "$@"; oneline --where "$2"; where="$2"; shift 2 ;; *) die "ack: unknown option $1" ;; esac; done
   [ -n "$id" ] && [ -n "$text" ] && [ -n "$where" ] || die "ack <id> --refuted '<belief, one line>' --where '<paths or systems the belief was about>'"
-  load_session; require_active
+  load_session; require_active; loop_operator_only ack
   local d; d="$(rdir "$id")"; [ -e "$d/closed" ] || die "receipt $id is not closed"
   [ "$(cat "$d/verdict")" = MISS ] || die "ack is for a MISS (this one is $(cat "$d/verdict")); INCONCLUSIVE takes retry or withdraw"
   [ -e "$d/acked" ] && die "receipt $id is already acknowledged"
@@ -309,7 +313,7 @@ cmd_withdraw() {
   local id="${1:-}" reason=""; [ -n "$id" ] && shift || usage
   while [ $# -gt 0 ]; do case "$1" in --reason) need_val "$@"; oneline --reason "$2"; reason="$2"; shift 2 ;; *) die "withdraw: unknown option $1" ;; esac; done
   [ -n "$reason" ] || die "withdraw <id> --reason '…'"
-  load_session; require_active
+  load_session; require_active; loop_operator_only withdraw
   local d jp; d="$(rdir "$id")"; [ -d "$d" ] || die "no receipt $id"
   [ -e "$d/acked" ] && die "receipt $id is acknowledged; nothing to withdraw"
   if [ -e "$d/closed" ]; then [ "$(cat "$d/verdict")" = INCONCLUSIVE ] || die "withdraw applies to an open receipt or an INCONCLUSIVE one (this one is $(cat "$d/verdict"))"; fi
