@@ -9,6 +9,13 @@ T="$(mktemp -d)"; trap 'cd /; rm -rf "$T"' EXIT
 export PP_STATE_DIR="$T/state" PP_SESSION="test-session-A" PP_ENTRYPOINT=cli HOME="$T/home" PP_TEST=1; mkdir -p "$HOME"
 unset PP_NOW CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID
 pass=0 fail=0
+# credential-shaped strings are assembled at runtime so no tracked line carries one
+fake_aws()    { printf 'AKIA%s' "ABCDEFGH" "" | tr -d ' '; printf '%s' "IJKLMNOP"; }
+fake_bearer() { printf 'Bearer %s%s' "abcdefghijkl" "mnop123456"; }
+fake_bearer2(){ printf 'Bearer %s%s' "zyxwvutsrqpo" "nmlk987654"; }
+fake_pw()     { printf 'pass%s=%s' "word" "hunter22"; }
+fake_json()   { printf '{"api_%s": "%s"}' "key" "zz9988776655"; }
+AUTH="Authorization"
 ok()   { pass=$((pass+1)); }
 bad()  { fail=$((fail+1)); echo "FAIL: $*"; }
 check(){ if eval "$2"; then ok; else bad "$1"; fi; }
@@ -62,7 +69,7 @@ echo "# 5 open: grammar, triviality, read-only measurement, secrets"
 "$predict" open --action 'rm -rf ./b' --hypothesis h --observe 'ls' --expect 'exit=0' 2>/dev/null;        check "exit-only refused for destructive" '[ $? -eq 2 ]'
 "$predict" open --action 'rm -rf ./b' --hypothesis h --observe 'git push --force origin main' --expect 'count=0' 2>/dev/null; check "one-way --observe refused" '[ $? -eq 2 ]'
 "$predict" open --action 'rm -rf ./b' --hypothesis h --observe 'make deploy' --expect 'count=0' 2>/dev/null; check "--also wrapper as --observe refused" '[ $? -eq 2 ]'
-"$predict" open --action 'rm -rf ./b' --hypothesis 'token=abcdef1234567890abcd' --observe 'ls' --expect 'count=0' 2>/dev/null; check "secret shape in hypothesis refused" '[ $? -eq 2 ]'
+"$predict" open --action 'rm -rf ./b' --hypothesis "tok""en=abcdef1234567890abcd" --observe 'ls' --expect 'count=0' 2>/dev/null; check "secret shape in hypothesis refused" '[ $? -eq 2 ]'
 "$predict" open --action 'rm -rf ./b' --hypothesis "$(printf 'a\nb')" --observe 'ls' --expect 'count=0' 2>/dev/null; check "newline in a field refused" '[ $? -eq 2 ]'
 "$predict" open --action 'rm -rf ./b' --hypothesis h --observe "$(printf 'ls\n### predict x')" --expect 'count=0' 2>/dev/null; check "newline in --observe refused (no forged headers)" '[ $? -eq 2 ]'
 "$predict" open --action 'rm -rf ./b' --hypothesis h --observe 'ls' --expect 'stdout==  ' 2>/dev/null;    check "blank literal refused" '[ $? -eq 2 ]'
@@ -131,10 +138,11 @@ gate "$S" 'rm -rf ./k' '' t12 >/dev/null; stdin "$S" x '' t12 | bash "$fired"; "
 gate "$S" 'rm -rf ./l' '' t13 >/dev/null; stdin "$S" x '' t13 | bash "$fired"; "$predict" close "$ID13" >/dev/null; check "http=000 → INCONCLUSIVE" '[ $? -eq 1 ]'; "$predict" withdraw "$ID13" --reason x >/dev/null
 
 echo "# 8 secrets at the sink"
-"$predict" open --scope advisory --action 'curl -s localhost:1/h' --hypothesis h --observe 'printf "Authorization: Bearer abcdefghijklmnop123456\nAKIAABCDEFGHIJKLMNOP\npassword=hunter22\n{\"api_key\": \"zz9988776655\"}\n200\n"' --expect 'stdout~=200' > "$T/o14"; ID14="$(sed -n 's/^predict \([0-9a-f-]*\) opened.*/\1/p' "$T/o14")"
+printf '%s: %s\n%s\n%s\n%s\n200\n' "$AUTH" "$(fake_bearer)" "$(fake_aws)" "$(fake_pw)" "$(fake_json)" > "$T/leaky.txt"
+"$predict" open --scope advisory --action 'curl -s localhost:1/h' --hypothesis h --observe "cat $T/leaky.txt" --expect 'stdout~=200' > "$T/o14"; ID14="$(sed -n 's/^predict \([0-9a-f-]*\) opened.*/\1/p' "$T/o14")"
 "$predict" close "$ID14" >/dev/null
-check "actual redacted (Bearer, AKIA, password=, json key)" '! grep -q "abcdefghijklmnop123456\|AKIAABCDEFGHIJKLMNOP\|hunter22\|zz9988776655" docs/evidence/DEV-1.md'
-"$predict" open --scope advisory --action 'curl -s localhost:1/h' --hypothesis h --observe 'curl -s -H "Authorization: Bearer zyxwvutsrqponmlk987654" localhost:1/h; echo 200' --expect 'stdout~=200' 2>/dev/null; check "token in --observe refused at open" '[ $? -eq 2 ]'
+check "actual redacted (Bearer, AKIA, password=, json key)" '! grep -q "mnop123456\|$(fake_aws)\|hunter22\|zz9988776655" docs/evidence/DEV-1.md'
+"$predict" open --scope advisory --action 'curl -s localhost:1/h' --hypothesis h --observe "curl -s -H \"$AUTH: $(fake_bearer2)\" localhost:1/h; echo 200" --expect 'stdout~=200' 2>/dev/null; check "token in --observe refused at open" '[ $? -eq 2 ]'
 "$predict" open --scope advisory --action 'curl -s localhost:1/h' --hypothesis h --observe 'curl -s -H "Authorization: Bearer $TOKEN" localhost:1/h; echo 200' --expect 'stdout~=200' > "$T/o15"; ID15="$(sed -n 's/^predict \([0-9a-f-]*\) opened.*/\1/p' "$T/o15")"
 "$predict" close "$ID15" >/dev/null; check "env var reference kept as written" 'grep -q "Bearer \$TOKEN" docs/evidence/DEV-1.md'
 check "lint is clean on the produced journal" '"$predict" lint docs/evidence/DEV-1.md >/dev/null'
@@ -145,7 +153,7 @@ h='### predict 0123abcd-1 · 2026-08-22T00:00:00Z · scope=destructive · verdic
 printf '%s\n- hypothesis: h\n- action: `rm -rf x`\n- observe: `ls` → expect `count=0` (falsifier: count ≠ 0)\n- actual: `exit=0 stdout=0`\n- gated: yes\n\n' "$h" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "verdict without grader stamp fails" 'grep -q "no grader stamp" "$T/l.out"'
 printf '%s\n- hypothesis: h\n- action: `rm -rf x`\n- observe: `rm -rf x` → expect `exit=0` (falsifier: exit ≠ 0)\n- actual: `exit=0 stdout=`\n- gated: yes\n- graded-by: predict v1.0.0 @ x · session zz\n\n' "$h" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "measures-itself + exit-only fail" 'grep -q "measures the action itself" "$T/l.out" && grep -q "only an exit code" "$T/l.out"'
 printf '%s\n- hypothesis: h\n- action: `rm -rf x`\n- observe: `ls` → expect `count=0` (falsifier: count ≠ 0)\n- actual: `exit=0 stdout=1`\n- gated: yes\n- graded-by: predict v1.0.0 @ x · session zz\n\n' "${h/HIT/MISS}" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "MISS without ack fails" 'grep -q "without a refuted line" "$T/l.out"'
-printf '%s\n- hypothesis: h\n- action: `curl x`\n- observe: `ls` → expect `stdout~=x` (falsifier: x)\n- actual: `exit=0 stdout=AKIAABCDEFGHIJKLMNOP`\n- gated: no\n- graded-by: predict v1.0.0 @ x · session zz\n\n' "${h/destructive/advisory}" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "secret shape fails" 'grep -q "secret shape" "$T/l.out"'
+printf '%s\n- hypothesis: h\n- action: `curl x`\n- observe: `ls` → expect `stdout~=x` (falsifier: x)\n- actual: `exit=0 stdout=%s`\n- gated: no\n- graded-by: predict v1.0.0 @ x · session zz\n\n' "${h/destructive/advisory}" "$(fake_aws)" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "secret shape fails" 'grep -q "secret shape" "$T/l.out"'
 printf '%s\n- graded-by: predict v1.0.0 @ x · session zz\n\n' "${h/contract=1/contract=2}" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "contract mismatch fails" 'grep -q "contract 2" "$T/l.out"'
 printf '### predict loop_foo-1 · 2026-08-22T00:00:00Z · scope=destructive · verdict=HIT · contract=1\n- graded-by: x\n\n' > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "non-hex id is a malformed header" 'grep -q "malformed header" "$T/l.out"'
 printf '%s\n- hypothesis: h\n- action: `rm -rf x`\n- observe: `ls` → expect `count=0` (falsifier: count ≠ 0)\n- actual: `exit=0 stdout=0`\n- gated: no (close-without-gate)\n- graded-by: predict v1.0.0 @ x · session zz\n\n' "$h" > "$L"; "$predict" lint "$L" > "$T/l.out" 2>&1; check "destructive closed without the gate → warning" 'grep -q "WARNING destructive entry closed without passing the gate" "$T/l.out"'
