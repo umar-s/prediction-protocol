@@ -74,7 +74,6 @@ gh run list
 gh release view v1.0.0
 gh api repos/o/r/pulls/3
 glab mr view 5
-cat <<EOF > notes.md
 echo DROP TABLE x
 printf 'rm -rf %s\n' "$d"
 python3 -c "print('rm -rf')"
@@ -97,3 +96,51 @@ git --version
 terraform -help
 kubectl delete --help
 echo '# not a comment' && ls
+git -C /srv/app log --oneline -3
+git -C /srv/app status
+kubectl -n prod get pods
+kubectl --context=prod rollout status deploy/api
+kubectl rollout history deploy/api
+helm -n prod list
+docker -H tcp://1.2.3.4:2375 ps
+aws --profile prod s3 ls
+aws s3 cp s3://bucket/file.tgz ./file.tgz
+aws logs start-query --log-group-name x --query-string 'fields @message'
+aws ec2 describe-instances --filters Name=tag:env,Values=prod
+aws configure set region eu-west-1
+gcloud run services list
+gcloud config set project x
+az account set -s x
+gh api repos/o/r/pulls/3 -f state=open -X GET
+gh api graphql -f query='{ viewer { login } }'
+terraform -chdir=infra plan
+npm --registry https://r.example.com publish --dry-run
+cargo publish --dry-run
+git push --dry-run --force origin main
+helm upgrade app ./chart --dry-run
+kubectl apply -f k.yml --dry-run=server
+rsync -an --delete dist/ prod:/var/www/
+ansible-playbook site.yml --syntax-check
+ansible-playbook site.yml --list-tasks
+psql -tAc 'select count(*) from orders'
+psql -c 'explain select * from t'
+psql -c 'with c as (select 1) select * from c'
+mysql -Nse 'select 1'
+sqlite3 app.db 'select count(*) from users'
+sqlite3 app.db '.tables'
+redis-cli get hits
+redis-cli -h cache.internal -p 6380 ping
+curl -sX GET https://api.example.com/x
+curl -sS -o /dev/null -w '%{http_code}' https://api.example.com/health
+fdisk -l
+parted -l
+zpool status
+dd if=/dev/zero of=/dev/null bs=1M count=1
+"$PREDICT" open --action 'alembic upgrade head && systemctl restart api' --hypothesis h --observe 'curl -s localhost/h' --expect http=200
+"$PREDICT" on DEV-1 --also 'make deploy'
+/home/x/.claude/plugins/cache/devpowers/prediction-protocol/1.0.0/bin/predict close abc-1
+git commit -m "fix: drop legacy table; rm -rf build step removed"
+crontab -l
+crontab -e
+systemctl --user status x
+ssh -o StrictHostKeyChecking=no prod

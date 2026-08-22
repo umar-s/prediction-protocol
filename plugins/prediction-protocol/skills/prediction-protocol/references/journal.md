@@ -9,10 +9,15 @@
 | refuted-beliefs ledger | `<repo>/docs/evidence/REFUTED.md` | `predict ack` only |
 
 `<repo>` is `git rev-parse --show-toplevel` where `predict on` ran (or
-`--root`). `<session_id>` comes from `CLAUDE_CODE_SESSION_ID`, which Claude
-Code exports to the Bash tool and passes to the hook on stdin; `PP_SESSION`
-overrides it for runners and tests. Open receipts never enter the
-repository: the journal gets only graded, redacted entries.
+`--root`) — run `predict on` inside the checkout whose branch will carry the
+journal. `<session_id>` comes from `CLAUDE_CODE_SESSION_ID`, which Claude
+Code exports to the Bash tool and passes to the hook on stdin; a runner
+exports one `PP_SESSION` around both `predict on` and `claude -p --session-id
+<uuid>` so the CLI and the hook key the same directory. Receipt ids are
+`<sha8 of the session id>-<seq>`. Open receipts never enter the repository:
+the journal gets only graded, redacted entries, and the state directory is
+protected — Edit/Write into it is denied, Bash writes are classified as
+`state-tamper`.
 
 ## Claims
 
@@ -26,10 +31,14 @@ repository: the journal gets only graded, redacted entries.
 | `http=NNN` | the first line is NNN (use `curl -s -o /dev/null -w '%{http_code}' URL`) | status ≠ NNN |
 | `count=N` | the first line is the number N (`… \| wc -l`, `psql -tAc 'select count(*) …'`) | count ≠ N |
 
-The measurement exiting non-zero with empty output, not being found, or
-timing out is **INCONCLUSIVE**, not MISS. A MISS is confirmed by a second
-run; a result that flaps is INCONCLUSIVE ("unstable"). Non-numeric output
-under a numeric claim is INCONCLUSIVE.
+A measurement that exits non-zero (for any claim but `exit=`), is not
+found, times out, returns `000` for `http=`, or returns nothing comparable is
+**INCONCLUSIVE**, not MISS. A MISS is confirmed by a second run and both runs
+are recorded; a result that flaps is INCONCLUSIVE ("unstable"). The
+measurement runs in a plain `bash -c` (the exit status is the last command's,
+so `ls -d build 2>/dev/null | wc -l` is a clean `count=`). `--observe` must be
+read-only by construction: the CLI classifies it and refuses a one-way
+command or a declared wrapper.
 
 Examples that carry information:
 
@@ -56,17 +65,18 @@ destructive HIT equals its baseline — the action changed nothing observable.
 - hypothesis: …
 - action: `…`                       # redacted: a token in a header never reaches the repo
 - observe: `…` → expect `…` (falsifier: …)
-- actual: `exit=N stdout=…` [— confirmed ×2 | — unstable: …] · redaction: builtin[+gitleaks]
+- actual: `exit=N stdout=…` [— confirmed ×2 (run 2: `…`) | — unstable: …] · redaction: builtin[+gitleaks]
+- gated: yes <tool_use_id> · fired <utc> | no (advisory or never gated) | no (close-without-gate) | no (retry)
 - baseline: `…`                     # only with --baseline
 - retry-of: <id>                    # only on a retry
 - graded-by: predict v<ver> @ <utc> · session <session8>
-- refuted: … → REFUTED.md           # added by predict ack
+- refuted: … · where: … → REFUTED.md   # added by predict ack
 - reason: …                         # bypass / withdrawn
 - superseded-by: <id>               # the original of a retry
 ```
 
 `actual` is the measurement's exit code plus at most 5 lines / 512 bytes of
-stdout, through the built-in masks (Authorization headers, bearer/basic
+stdout — masked first, then cut — through the built-in masks (Authorization headers, bearer/basic
 tokens, `user:pass@` URLs, AWS/GitHub/Slack/Stripe key shapes, JWTs,
 `password=`/`secret=`/`token=` pairs, private-key blocks) and, when the repo
 carries ci-gate, through `ci/scan-text.sh`; `redaction:` says which ran.
@@ -79,13 +89,15 @@ changes when the format does, and `predict lint` refuses another contract.
 ## REFUTED.md
 
 ```
-| date | entry | belief | where |
-|---|---|---|---|
-| 2026-08-22 | 3f9a1c20-4 | migration 0042 is idempotent on a re-run | DEV-512 |
+| date | entry | belief | where | journal |
+|---|---|---|---|---|
+| 2026-08-22 | 3f9a1c20-4 | migration 0042 is idempotent on a re-run | alembic/versions/0042_*.py, orders table | DEV-512 |
 ```
 
-One row per acknowledged MISS; `predict lint` fails a MISS without exactly
-one row. The reader is named: `task` phase 0 reads it and carries the rows
+One row per acknowledged MISS, `--where` naming the paths or systems the
+belief was about — that column is what the next session filters on;
+`predict lint` fails a MISS without exactly one row. One ledger per
+repository root, also for loop journals. The reader is named: `task` phase 0 reads it and carries the rows
 that touch this task's paths into the spec's Context pack; a loop reads it
 in its Phase 0. Without a reader the ledger is write-only — that was the
 donor's defect.
@@ -93,8 +105,13 @@ donor's defect.
 ## The report line
 
 ```
-predictions: 7 HIT / 1 MISS / 1 INCONCLUSIVE / 0 bypass / 0 open · scope=destructive 3/1/1 · n=9 · rate=insufficient (n<20) · window=DEV-512 · repro: predict report --journal <path>
+predictions: 7 HIT / 1 MISS / 1 INCONCLUSIVE / 0 bypass / 0 ungated / 0 open · scope=destructive 3/1/1 · n=9 · rate=insufficient (n<20) · window=DEV-512 · lint=ok · gate: seen 2026-08-22T14:05:11Z · repro: predict report --journal <path>
 ```
+
+`ungated` counts destructive entries closed without ever passing the gate
+(the wrapped or never-run action); `gate: seen` is the last time the
+platform actually fired the hook in this session (`never` means the hook is
+not registered, whatever `predict on` said).
 
 `rate = HIT / (HIT + MISS + INCONCLUSIVE)`; withdrawn and superseded entries
 are out of `n`; below `n=20` (`PP_K`) the rate prints as `insufficient`.
@@ -111,5 +128,8 @@ grammar · `actual` present for HIT/MISS/INCONCLUSIVE · destructive entries
 measure a different command than the action and predict more than an exit
 code (advisory: a warning) · no secret shape left in the entry · every MISS
 has a `refuted:` line and exactly one `REFUTED.md` row · bypass/withdrawn
-carry a reason · superseded names its successor. Exit 0 clean, 1 findings,
-2 no journal. `predict close` and `predict report` run it implicitly.
+carry a reason · superseded names its successor · every graded entry has a
+`gated:` line (a destructive entry closed without the gate is a warning).
+Exit 0 clean, 1 findings, 2 no journal. `predict close` lints the journal it
+just wrote and `predict report` prints `lint=ok|FAIL(n)` and exits 1 on
+findings.

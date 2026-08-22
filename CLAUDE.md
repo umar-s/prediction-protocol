@@ -19,20 +19,23 @@ bash scripts/lint.sh                                        # written rules as g
 bash plugins/prediction-protocol/tests/classify-corpus.sh   # the classifier contract
 bash plugins/prediction-protocol/tests/run.sh               # negative controls (offline, seconds)
 bash plugins/prediction-protocol/tests/platform-probe.sh    # through `claude -p`; manual, before a release
-claude plugin validate .
+claude plugin validate plugins/prediction-protocol           # the plugin lives in plugins/, the repo root has no manifest
 ```
 
 ## Invariants (each one has a lint grep or a negative control — add both when adding a rule)
 
 - **The hook never emits `allow`.** With a receipt it asks (interactive) or
   stays silent (headless); the human click on a one-way door is never
-  removed by this plugin.
+  removed by this plugin. A deny blocks by both channels (JSON + exit 2).
 - **Fail-closed is structural.** The platform runs the command when a hook
-  exits 1, prints broken JSON or overruns its timeout. Every error path on a
-  one-way command ends in deny JSON or exit 2; the inner deadline is shorter
-  than the `hooks.json` timeout; no network, no locks, no `set -e` without
-  the trap. An irrelevant command on a broken gate stays silent — one bug
-  must not lock every project the owner opens.
+  exits 1, prints broken JSON or overruns its timeout. The outer wrapper
+  answers deny with nothing but bash; the pure-bash pre-filter keeps
+  token-free commands independent of anything that can fail; every error
+  path on a one-way command ends in deny; control bytes are escaped; the
+  inner deadline is shorter than the `hooks.json` timeout and falls back to
+  a bash watchdog; no network, no locks in the hook. An irrelevant command
+  on a broken gate stays silent — one bug must not lock every project the
+  owner opens.
 - **The classifier's object is a shell command string**, never a file's
   content (that is ci-gate/migration-guard) and never prose. Two corpora are
   the contract; a new class needs a must-deny line and a must-pass neighbour.
@@ -52,7 +55,7 @@ claude plugin validate .
 
 ## Release
 
-The devpowers ritual (see `~/Project/devpowers/CLAUDE.md`): supply-chain
+The devpowers ritual (the catalog's own CLAUDE.md): supply-chain
 self-check over `git diff <prev-tag>..HEAD -- plugins/`, bump `plugin.json`
 (and `PP_VERSION` in `lib/common.sh` — lint checks they match), a CHANGELOG
 section (edit, never rewrite), annotated tag `vX.Y.Z`, `gh release create

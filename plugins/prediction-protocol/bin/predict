@@ -5,21 +5,23 @@
 # refuted-beliefs ledger. The model authors hypothesis, observable and claim;
 # it never writes actual or verdict.
 #
-#   predict on <journal> [--task ID | --loop NAME] [--also <prefix>]... [--root DIR]
+#   predict on <journal> [--task | --loop] [--also '<prefix>']... [--root DIR]
 #   predict off --reason '…'
 #   predict status [--json]
-#   predict open --action '<cmd>' --hypothesis '…' --observe '<cmd>' --expect '<claim>' [--scope destructive|advisory] [--baseline] [--timeout N]
+#   predict open --action '<cmd>' --hypothesis '…' --observe '<read-only cmd>' --expect '<claim>' [--scope destructive|advisory] [--baseline] [--timeout N]
 #   predict close <id>
-#   predict ack <id> --refuted '<belief, one line>'
-#   predict retry <id>
-#   predict withdraw <id> --reason '…'
+#   predict ack <id> --refuted '<belief, one line>' --where '<paths or systems>'
+#   predict retry <id> [--observe '<cmd>'] [--expect '<claim>']      # INCONCLUSIVE only
+#   predict withdraw <id> --reason '…'                                # open, or INCONCLUSIVE
 #   predict report [--json] [--journal PATH] [--last K]
 #   predict lint [PATH]
 #   predict classify '<cmd>'
 #   predict selftest
 #   predict version
-# Exit codes: 0 ok · 1 verdict MISS/INCONCLUSIVE, lint finding, or refused by policy · 2 usage / state / infra error
+# Exit codes: 0 ok · 1 verdict MISS/INCONCLUSIVE, lint finding, halted, or refused by policy · 2 usage / state / infra error
 set -u -o pipefail
+umask 077
+PP_TMP=""; trap '[ -n "$PP_TMP" ] && rm -rf "$PP_TMP"' EXIT
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$here/.." && pwd)"
 . "$PLUGIN_ROOT/lib/common.sh"
@@ -27,21 +29,32 @@ PLUGIN_ROOT="$(cd "$here/.." && pwd)"
 
 die() { echo "predict: $*" >&2; exit 2; }
 usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+need_val() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }
+oneline() { [[ "$2" == *$'\n'* || "$2" == *$'\r'* ]] && die "$1 is one line"; return 0; }
 
 session_id() {
   local s="${PP_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
   [ -n "$s" ] || die "no session id: set CLAUDE_CODE_SESSION_ID (Claude Code exports it to the Bash tool) or PP_SESSION"
+  pp_valid_session "$s" || die "session id '$s' must match [A-Za-z0-9][A-Za-z0-9_.-]*"
   printf '%s' "$s"
 }
-SID=""; SDIR=""; STATE=""
-load_session() { SID="$(session_id)"; SDIR="$(pp_session_dir "$SID")"; STATE="$SDIR/state"; }
-require_active() { [ "$(pp_kv_get "$STATE" active 2>/dev/null || true)" = 1 ] || die "this session is not under the protocol — run: predict on <journal> [--task ID | --loop NAME]"; }
+SID=""; SID8=""; SDIR=""; STATE=""
+load_session() { SID="$(session_id)" || exit 2; SID8="$(pp_sid8 "$SID")"; SDIR="$(pp_session_dir "$SID")"; STATE="$SDIR/state"; }
+require_active() { [ "$(pp_kv_get "$STATE" active 2>/dev/null || true)" = 1 ] || die "this session is not under the protocol — run: predict on <journal> [--task | --loop]"; }
 journal_path() { pp_kv_get "$STATE" journal_path; }
 root_dir() { pp_kv_get "$STATE" root; }
-receipt_dir() { printf '%s/receipts/%s' "$SDIR" "$1"; }
+ledger_path_for() { printf '%s/docs/evidence/REFUTED.md' "$1"; }          # one ledger per repo root
+receipt_dir() { pp_valid_id "$1" || die "bad receipt id '$1'"; printf '%s/receipts/%s' "$SDIR" "$1"; }
+rdir() { local d; d="$(receipt_dir "$1")" || exit 2; printf '%s' "$d"; }
 rget() { cat "$(receipt_dir "$1")/$2" 2>/dev/null; }
+next_id() { local seq; seq=$(( $(pp_kv_get "$STATE" seq 2>/dev/null || echo 0) + 1 )); pp_kv_set "$STATE" seq "$seq"; printf '%s-%s' "$SID8" "$seq"; }
 
 # ---------------------------------------------------------------- journal I/O
+with_lock() {   # path cmd… — serialise journal mutations across sessions
+  local f="$1.lock"; shift
+  if command -v flock >/dev/null 2>&1; then ( flock -w 10 9 || exit 2; "$@" ) 9>>"$f"
+  else "$@"; fi
+}
 journal_init() {   # path name
   [ -s "$1" ] && return 0
   mkdir -p "$(dirname "$1")" || die "cannot create $(dirname "$1")"
@@ -49,137 +62,158 @@ journal_init() {   # path name
     printf 'Written by `predict` (prediction-protocol v%s, contract %s). One entry per\nprotocol cycle; `predict lint` checks the entries, `predict report` counts\nthem. Do not edit entries by hand — a MISS is named through `predict ack`.\n\n' "$PP_VERSION" "$PP_CONTRACT"
   } > "$1"
 }
-journal_append() { printf '%s\n' "$1" >> "$2"; }
+_append() { printf '%s\n' "$1" >> "$2"; }
+journal_append() { with_lock "$2" _append "$1" "$2"; }
 entry_header() { printf '### predict %s · %s · scope=%s · verdict=%s · contract=%s' "$1" "$2" "$3" "$4" "$PP_CONTRACT"; }
-stamp() { printf -- '- graded-by: predict v%s @ %s · session %s' "$PP_VERSION" "$(pp_utc)" "${SID:0:8}"; }
+stamp() { printf -- '- graded-by: predict v%s @ %s · session %s' "$PP_VERSION" "$(pp_utc)" "$SID8"; }
+# change an entry's header verdict and add one line after its grader stamp — exact id, first entry only
+_rewrite() {
+  PP_ID="$2" PP_NV="$3" PP_LINE="$4" awk '
+    BEGIN { id=ENVIRON["PP_ID"]; nv=ENVIRON["PP_NV"]; line=ENVIRON["PP_LINE"]; done=0 }
+    !done && index($0, "### predict " id " ") == 1 { sub(/verdict=[A-Za-z]+/, "verdict=" nv); inside=1 }
+    inside && /^- graded-by:/ { print; if (line != "") print line; inside=0; done=1; next }
+    { print }' "$1" > "$1.tmp.$$" && mv -f "$1.tmp.$$" "$1"
+}
+rewrite_entry() { with_lock "$1" _rewrite "$@"; }
+jtext() { printf '%s' "$1" | pp_redact; }        # every model-authored field is redacted at the sink
 
 # ---------------------------------------------------------------- selftest
 selftest() {
-  local gate="$PLUGIN_ROOT/hooks/predict-gate.sh" tmp out rc fail=0
-  [ -x "$gate" ] || [ -r "$gate" ] || { echo "predict-gate: broken (hook missing at $gate)"; return 2; }
-  tmp="$(mktemp -d)" || { echo "predict-gate: broken (mktemp)"; return 2; }
+  local gate="$PLUGIN_ROOT/hooks/predict-gate.sh" tmp out rc fail=""
+  [ -r "$gate" ] || { echo "predict-gate: broken v$PP_VERSION (hook missing at $gate)"; return 2; }
+  tmp="$(mktemp -d)" || { echo "predict-gate: broken v$PP_VERSION (mktemp)"; return 2; }
   mkdir -p "$tmp/sessions/selftest"; printf 'active=1\njournal=selftest\n' > "$tmp/sessions/selftest/state"
-  out="$(printf '{"session_id":"selftest","tool_name":"Bash","tool_use_id":"st","tool_input":{"command":"git push --force origin main"}}' | PP_STATE_DIR="$tmp" PP_ENTRYPOINT=cli bash "$gate" 2>/dev/null)"; rc=$?
-  printf '%s' "$out" | grep -q '"permissionDecision":"deny"' || fail=1
-  out="$(printf '{"session_id":"selftest","tool_name":"Bash","tool_use_id":"st","tool_input":{"command":"ls -la"}}' | PP_STATE_DIR="$tmp" PP_ENTRYPOINT=cli bash "$gate" 2>/dev/null)"; rc=$?
-  { [ "$rc" -eq 0 ] && [ -z "$out" ]; } || fail=1
+  out="$(printf '{"session_id":"selftest","tool_name":"Bash","tool_use_id":"st","tool_input":{"command":"git push --force origin main"}}' | PP_SESSION= PP_STATE_DIR="$tmp" PP_ENTRYPOINT=cli bash "$gate" 2>/dev/null)"; rc=$?
+  { [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q '"permissionDecision":"deny"'; } || fail="no deny on a one-way command (rc=$rc)"
+  out="$(printf '{"session_id":"selftest","tool_name":"Bash","tool_use_id":"st","tool_input":{"command":"ls -la"}}' | PP_SESSION= PP_STATE_DIR="$tmp" PP_ENTRYPOINT=cli bash "$gate" 2>/dev/null)"; rc=$?
+  { [ "$rc" -eq 0 ] && [ -z "$out" ]; } || fail="${fail:+$fail; }not silent on ls (rc=$rc)"
   rm -rf "$tmp"
-  if [ "$fail" = 0 ]; then echo "predict-gate: active v$PP_VERSION (selftest: deny on a one-way command, silent on ls)"; return 0; fi
-  echo "predict-gate: broken v$PP_VERSION (selftest failed — the hook script does not deny a one-way command or is not silent on ls)"; return 2
+  if [ -z "$fail" ]; then echo "predict-gate: active v$PP_VERSION (selftest: deny on a one-way command, silent on ls)"; return 0; fi
+  echo "predict-gate: broken v$PP_VERSION (selftest: $fail)"; return 2
 }
 
 # ---------------------------------------------------------------- commands
 cmd_on() {
   local name="" kind=task root="" also=()
-  [ $# -ge 1 ] || usage
+  [ $# -ge 1 ] && [[ "$1" != -* ]] || usage
   name="$1"; shift
   while [ $# -gt 0 ]; do case "$1" in
-    --task) kind=task; name="$2"; shift 2 ;; --loop) kind=loop; name="$2"; shift 2 ;;
-    --also) also+=("$(pp_norm "$2")"); shift 2 ;; --root) root="$2"; shift 2 ;;
+    --task) kind=task; shift ;; --loop) kind=loop; shift ;;
+    --also) need_val "$@"; oneline --also "$2"; also+=("$(pp_norm "$2")"); shift 2 ;;
+    --root) need_val "$@"; root="$2"; shift 2 ;;
     *) die "on: unknown option $1" ;; esac; done
-  [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || die "journal name must be [A-Za-z0-9._-]+ (got '$name')"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "journal name must be [A-Za-z0-9._-]+ (got '$name')"
   [ -n "$root" ] || root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-  load_session; mkdir -p "$SDIR/receipts" || die "cannot create $SDIR"
+  load_session
+  local st rc; st="$(selftest)"; rc=$?
+  echo "$st"
+  [ "$rc" -eq 0 ] || { echo "predict: the session stays OUTSIDE the protocol — fix the hook first"; return 2; }
+  mkdir -p "$SDIR/receipts" || die "cannot create $SDIR"
   local jp; if [ "$kind" = loop ]; then jp="$root/loops/evidence/$name.md"; else jp="$root/docs/evidence/$name.md"; fi
   pp_kv_set "$STATE" active 1; pp_kv_set "$STATE" journal "$name"; pp_kv_set "$STATE" journal_path "$jp"
   pp_kv_set "$STATE" root "$root"; pp_kv_set "$STATE" kind "$kind"; pp_kv_set "$STATE" version "$PP_VERSION"
   pp_kv_get "$STATE" seq >/dev/null 2>&1 || pp_kv_set "$STATE" seq 0
-  pp_kv_del "$STATE" halted
-  : > "$SDIR/also"; local a; for a in "${also[@]+"${also[@]}"}"; do printf '%s\n' "$a" >> "$SDIR/also"; done
-  local st; st="$(selftest)"; local rc=$?
-  echo "$st"
-  echo "predict: session ${SID:0:8} under the protocol · journal $jp · one-way wrappers: ${#also[@]}"
-  return $rc
+  if [ "${#also[@]}" -gt 0 ]; then : > "$SDIR/also"; local a; for a in "${also[@]}"; do printf '%s\n' "$a" >> "$SDIR/also"; done; fi
+  [ -e "$SDIR/also" ] || : > "$SDIR/also"
+  echo "predict: session $SID8 under the protocol · journal $jp · one-way wrappers: $(grep -c . "$SDIR/also" 2>/dev/null || echo 0)"
+  local halted; halted="$(pp_kv_get "$STATE" halted 2>/dev/null || true)"
+  [ -z "$halted" ] || { echo "predict: still halted on $halted — ack / retry / withdraw before the next one-way action"; return 1; }
+  return 0
 }
 
 cmd_off() {
   local reason=""
-  while [ $# -gt 0 ]; do case "$1" in --reason) reason="$2"; shift 2 ;; *) die "off: unknown option $1" ;; esac; done
+  while [ $# -gt 0 ]; do case "$1" in --reason) need_val "$@"; oneline --reason "$2"; reason="$2"; shift 2 ;; *) die "off: unknown option $1" ;; esac; done
   [ -n "$reason" ] || die "off: --reason '…' is required — a bypass without a reason is not a bypass"
   load_session; require_active
-  local jp; jp="$(journal_path)"; journal_init "$jp" "$(pp_kv_get "$STATE" journal)"
-  local seq id; seq=$(( $(pp_kv_get "$STATE" seq) + 1 )); pp_kv_set "$STATE" seq "$seq"; id="${SID:0:8}-$seq"
+  local jp id; jp="$(journal_path)"; journal_init "$jp" "$(pp_kv_get "$STATE" journal)"; id="$(next_id)"
   journal_append "$(entry_header "$id" "$(pp_utc)" session bypass)
-- reason: $(printf '%s' "$reason" | pp_redact)
+- reason: $(jtext "$reason")
 $(stamp)
 " "$jp"
-  pp_kv_set "$STATE" active 0; pp_kv_del "$STATE" halted
-  echo "predict: protocol OFF for session ${SID:0:8} — recorded as bypass $id in $jp; one-way commands now ask instead of requiring a receipt"
+  pp_kv_set "$STATE" active 0
+  echo "predict: protocol OFF for session $SID8 — recorded as bypass $id in $jp; one-way commands now ask instead of requiring a receipt (the halt, if any, is kept)"
 }
 
 cmd_status() {
   load_session
-  local active journal halted open=0 inflight=0 d
+  local active journal halted open=0 inflight=0 d seen
   active="$(pp_kv_get "$STATE" active 2>/dev/null || echo 0)"; journal="$(pp_kv_get "$STATE" journal_path 2>/dev/null || true)"; halted="$(pp_kv_get "$STATE" halted 2>/dev/null || true)"
+  seen="$(cat "$SDIR/hook-seen" 2>/dev/null || echo never)"
   for d in "$SDIR"/receipts/*/; do [ -d "$d" ] || continue; [ -e "$d/closed" ] && continue; if [ -e "$d/consumed" ]; then inflight=$((inflight+1)); else open=$((open+1)); fi; done
-  if [ "${1:-}" = --json ]; then printf '{"session":"%s","active":%s,"journal":%s,"halted":%s,"open":%s,"inflight":%s,"version":"%s"}\n' "$SID" "${active:-0}" "$(pp_json_str "$journal")" "$(pp_json_str "$halted")" "$open" "$inflight" "$PP_VERSION"
-  else echo "predict v$PP_VERSION · session ${SID:0:8} · active=${active:-0} · journal=${journal:-none} · open=$open · in-flight=$inflight · halted=${halted:-no}"; fi
+  if [ "${1:-}" = --json ]; then printf '{"session":"%s","active":%s,"journal":%s,"halted":%s,"open":%s,"inflight":%s,"gate_seen":%s,"version":"%s"}\n' "$SID8" "${active:-0}" "$(pp_json_str "$journal")" "$(pp_json_str "$halted")" "$open" "$inflight" "$(pp_json_str "$seen")" "$PP_VERSION"
+  else echo "predict v$PP_VERSION · session $SID8 · active=${active:-0} · journal=${journal:-none} · open=$open · in-flight=$inflight · halted=${halted:-no} · gate: seen $seen"; fi
   [ -z "$halted" ]
 }
 
+check_observe() {   # the measurement must be read-only by construction
+  local r; if r="$(pp_classify "$1")"; then die "--observe is classified as one-way (\`${r%%	*}\`): a measurement must be read-only, not an action"; fi
+  [[ "$1" =~ (^|[[:space:]])predict[[:space:]] ]] && die "--observe cannot call predict"
+  return 0
+}
 cmd_open() {
   local action="" hyp="" obs="" exp="" scope=destructive baseline=0 tmo=60
   while [ $# -gt 0 ]; do case "$1" in
-    --action) action="$2"; shift 2 ;; --hypothesis) hyp="$2"; shift 2 ;; --observe) obs="$2"; shift 2 ;; --expect) exp="$2"; shift 2 ;;
-    --scope) scope="$2"; shift 2 ;; --baseline) baseline=1; shift ;; --timeout) tmo="$2"; shift 2 ;; *) die "open: unknown option $1" ;; esac; done
+    --action) need_val "$@"; action="$2"; shift 2 ;; --hypothesis) need_val "$@"; hyp="$2"; shift 2 ;; --observe) need_val "$@"; obs="$2"; shift 2 ;; --expect) need_val "$@"; exp="$2"; shift 2 ;;
+    --scope) need_val "$@"; scope="$2"; shift 2 ;; --baseline) baseline=1; shift ;; --timeout) need_val "$@"; tmo="$2"; shift 2 ;; *) die "open: unknown option $1" ;; esac; done
   [ -n "$action" ] && [ -n "$hyp" ] && [ -n "$obs" ] && [ -n "$exp" ] || die "open: --action, --hypothesis, --observe and --expect are all required"
   [[ "$scope" =~ ^(destructive|advisory)$ ]] || die "open: --scope is destructive or advisory"
+  [[ "$tmo" =~ ^[0-9]+$ ]] || die "open: --timeout is seconds"
+  oneline --hypothesis "$hyp"; oneline --observe "$obs"; oneline --expect "$exp"; oneline --action "$action"
   pp_claim_ok "$exp" || die "open: --expect '$exp' is not in the claim grammar: exit=N | stdout==LIT | stdout~=ERE | stdout-in=A..B | lines=N | http=NNN | count=N"
-  [[ "$hyp" == *$'\n'* ]] && die "open: --hypothesis is one line"
   local an on; an="$(pp_norm "$action")"; on="$(pp_norm "$obs")"
   if [ "$scope" = destructive ]; then
     [ "$an" != "$on" ] || die "open: for a destructive action the measurement must be a different command than the action (the action's own exit code is not a prediction about the system)"
     [[ "$exp" =~ ^exit= ]] && die "open: for a destructive action --expect cannot be only an exit code; predict a value the system will show (count=, stdout==, http=, …)"
   fi
   load_session; require_active
-  local seq id d; seq=$(( $(pp_kv_get "$STATE" seq) + 1 )); pp_kv_set "$STATE" seq "$seq"; id="${SID:0:8}-$seq"; d="$(receipt_dir "$id")"
+  PP_ALSO="$(cat "$SDIR/also" 2>/dev/null || true)"; export PP_ALSO
+  check_observe "$obs"
+  local f; for f in "$hyp" "$obs" "$exp" "$action"; do pp_has_secret_shape "$f" && die "open: a field carries a secret shape (token, password, key) — reference the value through an environment variable name, never inline"; done
+  local id d; id="$(next_id)"; d="$SDIR/receipts/$id"
   mkdir -p "$d" || die "cannot create $d"
   printf '%s' "$action" > "$d/action"; printf '%s' "$an" > "$d/action_norm"; printf '%s' "$hyp" > "$d/hypothesis"
   printf '%s' "$obs" > "$d/observe"; printf '%s' "$exp" > "$d/expect"; printf '%s' "$scope" > "$d/scope"; printf '%s' "$tmo" > "$d/timeout"
   pp_now > "$d/opened"; pp_utc > "$d/opened_utc"
-  cat "$d/action_norm" "$d/hypothesis" "$d/observe" "$d/expect" | pp_sha > "$d/sha"
+  cat "$d/action_norm" "$d/hypothesis" "$d/observe" "$d/expect" "$d/opened" | pp_sha > "$d/sha"
   if [ "$baseline" = 1 ]; then
-    local bo; bo="$(timeout "$tmo" bash -c "$obs" 2>/dev/null | head -c "$PP_ACTUAL_BYTES")"; printf '%s' "$bo" > "$d/baseline"
+    local bo; bo="$(pp_with_deadline "$tmo" bash -c "$obs" 2>/dev/null < /dev/null | pp_redact | head -c "$PP_ACTUAL_BYTES")"; printf '%s' "$bo" > "$d/baseline"
   fi
-  echo "predict $id opened · scope=$scope · action: \`$an\` · observe: \`$on\` → expect $exp (falsifier: $(pp_falsifier "$exp"))"
+  echo "predict $id opened · scope=$scope · action: \`$(jtext "$an")\` · observe: \`$(jtext "$on")\` → expect $exp (falsifier: $(pp_falsifier "$exp"))"
   [ "$scope" = advisory ] && echo "predict: advisory receipt — no gate; run the action, then: predict close $id"
   return 0
 }
 
 fold_lines() { tr -d '\r' | awk '{printf "%s%s", (NR>1?" ⏎ ":""), $0}'; }
-# journal rendering of commands: redacted (a token in a curl header must not reach the repo);
-# the receipt in session state keeps the exact text for matching
-jcmd() { printf '%s' "$1" | pp_redact; }
-# run the observe command once; prints "<exit>\t<stdout-file>"
-run_observe() {   # obs timeout outfile
-  local rc; timeout -k 2 "$2" bash -c "$1" > "$3" 2> "$3.err"; rc=$?; printf '%s' "$rc"
+run_observe() {   # obs timeout outfile → prints exit code
+  local rc; pp_with_deadline "$2" bash -c "$1" > "$3" 2> "$3.err" < /dev/null; rc=$?; printf '%s' "$rc"
 }
-grade() {   # claim exit stdout-file → prints HIT|MISS|INCONCLUSIVE
+grade() {   # claim exit stdout-file → HIT|MISS|INCONCLUSIVE (spec §3: a measurement that did not run cleanly is inconclusive)
   local claim="$1" rc="$2" f="$3" out first n
-  out="$(cat "$f")"; first="$(head -n1 "$f" | tr -d '\r')"; n="$(grep -c '' "$f" || true)"
-  case "$rc" in 124|137) printf 'INCONCLUSIVE'; return ;; 127|126) printf 'INCONCLUSIVE'; return ;; esac
+  out="$(tr -d '\r' < "$f")"; first="$(head -n1 "$f" | tr -d '\r')"; n="$(grep -c '' "$f" 2>/dev/null || echo 0)"
   case "$claim" in
-    exit=*) [ "$rc" = "${claim#exit=}" ] && printf 'HIT' || printf 'MISS' ;;
-    *) if [ "$rc" -ne 0 ] && [ -z "$out" ]; then printf 'INCONCLUSIVE'; return; fi
-       case "$claim" in
-         stdout==*) [ "$(pp_trim "$out")" = "$(pp_trim "${claim#stdout==}")" ] && printf 'HIT' || printf 'MISS' ;;
-         stdout~=*) printf '%s' "$out" | grep -Eq -- "${claim#stdout~=}" && printf 'HIT' || printf 'MISS' ;;
-         count=*|http=*) local want="${claim#*=}" got; got="$(pp_trim "$first")"
-            [[ "$got" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { printf 'INCONCLUSIVE'; return; }
-            [ "$got" = "$want" ] && printf 'HIT' || printf 'MISS' ;;
-         lines=*) [ "$n" = "${claim#lines=}" ] && printf 'HIT' || printf 'MISS' ;;
-         stdout-in=*) local r="${claim#stdout-in=}" lo="${r%%..*}" hi="${r##*..}" got; got="$(pp_trim "$first")"
-            [[ "$got" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { printf 'INCONCLUSIVE'; return; }
-            awk -v g="$got" -v lo="$lo" -v hi="$hi" 'BEGIN{exit !(g+0>=lo+0 && g+0<=hi+0)}' && printf 'HIT' || printf 'MISS' ;;
-         *) printf 'INCONCLUSIVE' ;;
-       esac ;;
+    exit=*) case "$rc" in 124|137) printf 'INCONCLUSIVE' ;; *) [ "$rc" = "${claim#exit=}" ] && printf 'HIT' || printf 'MISS' ;; esac; return ;;
+  esac
+  [ "$rc" -eq 0 ] || { printf 'INCONCLUSIVE'; return; }
+  case "$claim" in
+    stdout==*) [ "$(pp_trim "$out")" = "$(pp_trim "${claim#stdout==}")" ] && printf 'HIT' || printf 'MISS' ;;
+    stdout~=*) printf '%s' "$out" | grep -Eq -- "${claim#stdout~=}" && printf 'HIT' || printf 'MISS' ;;
+    count=*|http=*) local want="${claim#*=}" got; got="$(pp_trim "$first")"
+       [[ "$got" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { printf 'INCONCLUSIVE'; return; }
+       [ "$got" = 000 ] && { printf 'INCONCLUSIVE'; return; }
+       [ "$got" = "$want" ] && printf 'HIT' || printf 'MISS' ;;
+    lines=*) [ "$n" = "${claim#lines=}" ] && printf 'HIT' || printf 'MISS' ;;
+    stdout-in=*) local r lo hi got; r="${claim#stdout-in=}"; lo="${r%%..*}"; hi="${r##*..}"; got="$(pp_trim "$first")"
+       [[ "$got" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || { printf 'INCONCLUSIVE'; return; }
+       awk -v g="$got" -v lo="$lo" -v hi="$hi" 'BEGIN{exit !(g+0>=lo+0 && g+0<=hi+0)}' && printf 'HIT' || printf 'MISS' ;;
+    *) printf 'INCONCLUSIVE' ;;
   esac
 }
-render_actual() {   # exit stdout-file → redacted excerpt (single line, ≤ bytes)
+render_actual() {   # exit stdout-file → "exit=N stdout=<redacted, bounded excerpt>|<redaction label>"
   local rc="$1" f="$2" ex red="builtin" root scan
-  ex="$(head -n "$PP_ACTUAL_LINES" "$f" | head -c "$PP_ACTUAL_BYTES" | pp_redact | fold_lines)"
+  ex="$(pp_redact < "$f" | head -n "$PP_ACTUAL_LINES" | head -c "$PP_ACTUAL_BYTES" | iconv -c -f UTF-8 -t UTF-8 2>/dev/null | fold_lines)"
   [ -s "$f" ] && [ "$(wc -c < "$f")" -gt "$PP_ACTUAL_BYTES" ] && ex="$ex…"
-  [ -z "$ex" ] && ex="$(head -n 2 "$f.err" 2>/dev/null | pp_redact | fold_lines)"
+  [ -z "$ex" ] && ex="$(pp_redact < "$f.err" 2>/dev/null | head -n 2 | head -c 300 | fold_lines)"
   root="$(root_dir 2>/dev/null || true)"
   if [ -n "$root" ] && [ -x "$root/ci/scan-text.sh" ]; then
     scan="$(mktemp -d)"; printf '%s\n' "$ex" > "$scan/actual.md"
@@ -190,156 +224,170 @@ render_actual() {   # exit stdout-file → redacted excerpt (single line, ≤ by
   printf 'exit=%s stdout=%s|%s' "$rc" "$ex" "$red"
 }
 close_receipt() {   # id [retry-of]
-  local id="$1" retry_of="${2:-}" d obs exp tmo scope out rc v v2 actual red conf="" jp
-  d="$(receipt_dir "$id")"; [ -d "$d" ] || die "no receipt $id in this session"
+  local id="$1" retry_of="${2:-}" d obs exp tmo scope w rc rc2 v v2 actual red conf="" jp gated
+  d="$(rdir "$id")"; [ -d "$d" ] || die "no receipt $id in this session"
   [ -e "$d/closed" ] && die "receipt $id is already closed (verdict $(cat "$d/verdict"))"
+  local consumed; consumed="$(cat "$d/consumed" 2>/dev/null || true)"
+  case "$consumed" in
+    "") gated="no (advisory or never gated)" ;;
+    *" retry"|*" close-without-gate") gated="no (${consumed##* })" ;;
+    *) [ -e "$d/fired" ] || die "receipt $id was released to the gate but its action never ran (declined, or another hook denied it). If it did not run: predict withdraw $id --reason 'not fired'"
+       gated="yes ${consumed##* } · fired $(cat "$d/fired")" ;;
+  esac
   obs="$(cat "$d/observe")"; exp="$(cat "$d/expect")"; tmo="$(cat "$d/timeout" 2>/dev/null || echo 60)"; scope="$(cat "$d/scope")"
-  out="$(mktemp)"; rc="$(run_observe "$obs" "$tmo" "$out")"; v="$(grade "$exp" "$rc" "$out")"
+  w="$(mktemp -d)" || die "mktemp"; PP_TMP="$w"
+  rc="$(run_observe "$obs" "$tmo" "$w/out")"; v="$(grade "$exp" "$rc" "$w/out")"
   if [ "$v" = MISS ]; then    # a miss is confirmed by a second measurement; a flapping observable is INCONCLUSIVE
-    sleep 1; rc2="$(run_observe "$obs" "$tmo" "$out.2")"; v2="$(grade "$exp" "$rc2" "$out.2")"
-    if [ "$v2" = MISS ]; then conf=" — confirmed ×2"; else v=INCONCLUSIVE; conf=" — unstable: second run $v2"; fi
-    rm -f "$out.2" "$out.2.err"
+    sleep 1; rc2="$(run_observe "$obs" "$tmo" "$w/out2")"; v2="$(grade "$exp" "$rc2" "$w/out2")"
+    local a2; a2="$(render_actual "$rc2" "$w/out2")"; a2="${a2%|*}"
+    if [ "$v2" = MISS ]; then conf=" — confirmed ×2 (run 2: \`$a2\`)"; else v=INCONCLUSIVE; conf=" — unstable: run 2 graded $v2 (\`$a2\`)"; fi
   fi
-  actual="$(render_actual "$rc" "$out")"; red="${actual##*|}"; actual="${actual%|*}"; rm -f "$out" "$out.err"
+  actual="$(render_actual "$rc" "$w/out")"; red="${actual##*|}"; actual="${actual%|*}"
   printf '%s' "$v" > "$d/verdict"; printf '%s' "$actual" > "$d/actual"; pp_now > "$d/closed"
-  [ -e "$d/consumed" ] || printf '%s %s\n' "$(pp_now)" "close-without-gate" > "$d/consumed"
+  [ -n "$consumed" ] || printf '%s %s\n' "$(pp_now)" "close-without-gate" > "$d/consumed"
   jp="$(journal_path)"; journal_init "$jp" "$(pp_kv_get "$STATE" journal)"
   local extra=""; [ -n "$retry_of" ] && extra="- retry-of: $retry_of"$'\n'
   [ -s "$d/baseline" ] && extra="$extra- baseline: \`$(pp_redact < "$d/baseline" | head -c 200 | fold_lines)\`"$'\n'
   journal_append "$(entry_header "$id" "$(pp_utc)" "$scope" "$v")
-- hypothesis: $(cat "$d/hypothesis")
-- action: \`$(jcmd "$(cat "$d/action_norm")")\`
-- observe: \`$(jcmd "$(cat "$d/observe")")\` → expect \`$exp\` (falsifier: $(pp_falsifier "$exp"))
+- hypothesis: $(jtext "$(cat "$d/hypothesis")")
+- action: \`$(jtext "$(cat "$d/action_norm")")\`
+- observe: \`$(jtext "$obs")\` → expect \`$(jtext "$exp")\` (falsifier: $(pp_falsifier "$exp"))
 - actual: \`$actual\`$conf · redaction: $red
+- gated: $gated
 $extra$(stamp)
 " "$jp"
-  case "$v" in HIT) pp_kv_del "$STATE" halted ;; *) pp_kv_set "$STATE" halted "$id" ;; esac
+  case "$v" in HIT) ;; *) pp_kv_set "$STATE" halted "$id" ;; esac
   echo "predict $id → $v · $actual · $jp"
+  cmd_lint "$jp" >/dev/null 2>&1 || echo "predict: lint findings in $jp — run: predict lint $jp"
   case "$v" in
     HIT) return 0 ;;
-    MISS) echo "predict: MISS — one-way actions are halted. Name the refuted belief: predict ack $id --refuted '<one line>' (or retry / withdraw)."; return 1 ;;
-    *) echo "predict: INCONCLUSIVE — the measurement did not produce a comparable result. predict retry $id after fixing the measurement, or predict withdraw $id --reason '…'."; return 1 ;;
+    MISS) echo "predict: MISS — one-way actions are halted. Name the refuted belief: predict ack $id --refuted '<one line>' --where '<paths or systems>'"; return 1 ;;
+    *) echo "predict: INCONCLUSIVE — the measurement did not produce a comparable result. Fix it and re-measure: predict retry $id [--observe '<cmd>'] [--expect '<claim>'], or predict withdraw $id --reason '…'"; return 1 ;;
   esac
 }
 cmd_close() { [ $# -ge 1 ] || usage; load_session; require_active; close_receipt "$1"; }
 
 cmd_ack() {
-  local id="${1:-}" text=""; shift || true
-  while [ $# -gt 0 ]; do case "$1" in --refuted) text="$2"; shift 2 ;; *) die "ack: unknown option $1" ;; esac; done
-  [ -n "$id" ] && [ -n "$text" ] || die "ack <id> --refuted '<belief, one line>'"
-  [[ "$text" == *$'\n'* ]] && die "ack: one line"
+  local id="${1:-}" text="" where=""; [ -n "$id" ] && shift
+  while [ $# -gt 0 ]; do case "$1" in --refuted) need_val "$@"; oneline --refuted "$2"; text="$2"; shift 2 ;; --where) need_val "$@"; oneline --where "$2"; where="$2"; shift 2 ;; *) die "ack: unknown option $1" ;; esac; done
+  [ -n "$id" ] && [ -n "$text" ] && [ -n "$where" ] || die "ack <id> --refuted '<belief, one line>' --where '<paths or systems the belief was about>'"
   load_session; require_active
-  local d; d="$(receipt_dir "$id")"; [ -e "$d/closed" ] || die "receipt $id is not closed"
-  [ "$(cat "$d/verdict")" = MISS ] || die "ack is for a MISS (this one is $(cat "$d/verdict")); use retry or withdraw"
+  local d; d="$(rdir "$id")"; [ -e "$d/closed" ] || die "receipt $id is not closed"
+  [ "$(cat "$d/verdict")" = MISS ] || die "ack is for a MISS (this one is $(cat "$d/verdict")); INCONCLUSIVE takes retry or withdraw"
   [ -e "$d/acked" ] && die "receipt $id is already acknowledged"
-  local root ledger jp; root="$(root_dir)"; ledger="$root/docs/evidence/REFUTED.md"; jp="$(journal_path)"
-  if ! [ -s "$ledger" ]; then mkdir -p "$(dirname "$ledger")"; printf '# Refuted beliefs\n\nAppend-only, written by `predict ack`. Read this before touching the paths it names.\n\n| date | entry | belief | where |\n|---|---|---|---|\n' > "$ledger"; fi
-  printf '| %s | %s | %s | %s |\n' "$(pp_utc | cut -c1-10)" "$id" "$(printf '%s' "$text" | pp_redact | sed 's/|/\\|/g')" "$(basename "$jp" .md)" >> "$ledger"
-  # add the refuted line under the journal entry
-  awk -v id="$id" -v line="- refuted: $(printf '%s' "$text" | pp_redact) → REFUTED.md" '
-    $0 ~ ("^### predict " id " ") {inside=1}
-    inside && /^- graded-by:/ {print; print line; inside=0; next}
-    {print}' "$jp" > "$jp.tmp.$$" && mv -f "$jp.tmp.$$" "$jp"
+  local root ledger jp; root="$(root_dir)"; ledger="$(ledger_path_for "$root")"; jp="$(journal_path)"
+  if ! [ -s "$ledger" ]; then mkdir -p "$(dirname "$ledger")"; printf '# Refuted beliefs\n\nAppend-only, written by `predict ack`. Read this before touching the paths it names.\n\n| date | entry | belief | where | journal |\n|---|---|---|---|---|\n' > "$ledger"; fi
+  local esc_t esc_w; esc_t="$(jtext "$text" | sed 's/|/\\|/g')"; esc_w="$(jtext "$where" | sed 's/|/\\|/g')"
+  with_lock "$ledger" _append "| $(pp_utc | cut -c1-10) | $id | $esc_t | $esc_w | $(basename "$jp" .md) |" "$ledger"
+  rewrite_entry "$jp" "$id" MISS "- refuted: $(jtext "$text") · where: $(jtext "$where") → REFUTED.md"
   pp_now > "$d/acked"; pp_kv_del "$STATE" halted
-  echo "predict $id acknowledged · REFUTED.md ← $text · halt cleared"
+  echo "predict $id acknowledged · REFUTED.md ← $text ($where) · halt cleared"
 }
 
 cmd_retry() {
-  local id="${1:-}"; [ -n "$id" ] || usage; load_session; require_active
-  local d; d="$(receipt_dir "$id")"; [ -e "$d/closed" ] || die "receipt $id is not closed"
-  local seq nid nd; seq=$(( $(pp_kv_get "$STATE" seq) + 1 )); pp_kv_set "$STATE" seq "$seq"; nid="${SID:0:8}-$seq"; nd="$(receipt_dir "$nid")"
+  local id="${1:-}" obs="" exp=""; [ -n "$id" ] && shift || usage
+  while [ $# -gt 0 ]; do case "$1" in --observe) need_val "$@"; oneline --observe "$2"; obs="$2"; shift 2 ;; --expect) need_val "$@"; oneline --expect "$2"; exp="$2"; shift 2 ;; *) die "retry: unknown option $1" ;; esac; done
+  load_session; require_active
+  local d; d="$(rdir "$id")"; [ -e "$d/closed" ] || die "receipt $id is not closed"
+  [ "$(cat "$d/verdict")" = INCONCLUSIVE ] || die "retry is for an INCONCLUSIVE receipt (this one is $(cat "$d/verdict")); a MISS is acknowledged, never re-measured"
+  [ -n "$exp" ] && { pp_claim_ok "$exp" || die "retry: --expect '$exp' is not in the claim grammar"; }
+  PP_ALSO="$(cat "$SDIR/also" 2>/dev/null || true)"; export PP_ALSO
+  [ -n "$obs" ] && check_observe "$obs"
+  local nid nd; nid="$(next_id)"; nd="$SDIR/receipts/$nid"
   mkdir -p "$nd"; local f; for f in action action_norm hypothesis observe expect scope timeout; do cp "$d/$f" "$nd/$f" 2>/dev/null || true; done
-  pp_now > "$nd/opened"; pp_utc > "$nd/opened_utc"; cat "$nd/action_norm" "$nd/hypothesis" "$nd/observe" "$nd/expect" | pp_sha > "$nd/sha"
+  [ -n "$obs" ] && printf '%s' "$obs" > "$nd/observe"; [ -n "$exp" ] && printf '%s' "$exp" > "$nd/expect"
+  [ "$(cat "$nd/scope")" = destructive ] && [ "$(pp_norm "$(cat "$nd/observe")")" = "$(cat "$nd/action_norm")" ] && die "retry: the measurement must differ from the action"
+  pp_now > "$nd/opened"; pp_utc > "$nd/opened_utc"; cat "$nd/action_norm" "$nd/hypothesis" "$nd/observe" "$nd/expect" "$nd/opened" | pp_sha > "$nd/sha"
   printf '%s retry\n' "$(pp_now)" > "$nd/consumed"
   local jp; jp="$(journal_path)"; grep -q "^### predict $id · " "$jp" 2>/dev/null && rewrite_entry "$jp" "$id" superseded "- superseded-by: $nid"
+  pp_kv_del "$STATE" halted
   close_receipt "$nid" "$id"
 }
 
-# change an entry's header verdict and add one line after its grader stamp
-rewrite_entry() {   # journal id new-verdict line
-  awk -v id="$2" -v nv="$3" -v line="$4" '
-    $0 ~ ("^### predict " id " ") { sub(/verdict=[A-Za-z]+/, "verdict=" nv); inside=1 }
-    inside && /^- graded-by:/ { print; if (line != "") print line; inside=0; next }
-    { print }' "$1" > "$1.tmp.$$" && mv -f "$1.tmp.$$" "$1"
-}
 cmd_withdraw() {
-  local id="${1:-}" reason=""; shift || true
-  while [ $# -gt 0 ]; do case "$1" in --reason) reason="$2"; shift 2 ;; *) die "withdraw: unknown option $1" ;; esac; done
-  [ -n "$id" ] && [ -n "$reason" ] || die "withdraw <id> --reason '…'"
+  local id="${1:-}" reason=""; [ -n "$id" ] && shift || usage
+  while [ $# -gt 0 ]; do case "$1" in --reason) need_val "$@"; oneline --reason "$2"; reason="$2"; shift 2 ;; *) die "withdraw: unknown option $1" ;; esac; done
+  [ -n "$reason" ] || die "withdraw <id> --reason '…'"
   load_session; require_active
-  local d jp; d="$(receipt_dir "$id")"; [ -d "$d" ] || die "no receipt $id"
+  local d jp; d="$(rdir "$id")"; [ -d "$d" ] || die "no receipt $id"
   [ -e "$d/acked" ] && die "receipt $id is acknowledged; nothing to withdraw"
+  if [ -e "$d/closed" ]; then [ "$(cat "$d/verdict")" = INCONCLUSIVE ] || die "withdraw applies to an open receipt or an INCONCLUSIVE one (this one is $(cat "$d/verdict"))"; fi
   jp="$(journal_path)"; journal_init "$jp" "$(pp_kv_get "$STATE" journal)"
   if grep -q "^### predict $id · " "$jp"; then
-    rewrite_entry "$jp" "$id" withdrawn "- reason: $(printf '%s' "$reason" | pp_redact) · withdrawn @ $(pp_utc)"
-    printf 'withdrawn' > "$d/verdict"; [ -e "$d/closed" ] || pp_now > "$d/closed"
-    [ "$(pp_kv_get "$STATE" halted 2>/dev/null || true)" = "$id" ] && pp_kv_del "$STATE" halted
-    echo "predict $id withdrawn · $reason"; return 0
-  fi
-  journal_append "$(entry_header "$id" "$(pp_utc)" "$(cat "$d/scope")" withdrawn)
-- hypothesis: $(cat "$d/hypothesis")
-- action: \`$(jcmd "$(cat "$d/action_norm")")\`
-- observe: \`$(jcmd "$(cat "$d/observe")")\` → expect \`$(cat "$d/expect")\`
-- reason: $(printf '%s' "$reason" | pp_redact)
+    rewrite_entry "$jp" "$id" withdrawn "- reason: $(jtext "$reason") · withdrawn @ $(pp_utc)"
+  else
+    journal_append "$(entry_header "$id" "$(pp_utc)" "$(cat "$d/scope")" withdrawn)
+- hypothesis: $(jtext "$(cat "$d/hypothesis")")
+- action: \`$(jtext "$(cat "$d/action_norm")")\`
+- observe: \`$(jtext "$(cat "$d/observe")")\` → expect \`$(cat "$d/expect")\`
+- reason: $(jtext "$reason")
 $(stamp)
 " "$jp"
-  printf 'withdrawn' > "$d/verdict"; pp_now > "$d/closed"; [ -e "$d/consumed" ] || printf '%s withdraw\n' "$(pp_now)" > "$d/consumed"
+  fi
+  printf 'withdrawn' > "$d/verdict"; [ -e "$d/closed" ] || pp_now > "$d/closed"; [ -e "$d/consumed" ] || printf '%s withdraw\n' "$(pp_now)" > "$d/consumed"
   [ "$(pp_kv_get "$STATE" halted 2>/dev/null || true)" = "$id" ] && pp_kv_del "$STATE" halted
   echo "predict $id withdrawn · $reason"
 }
 
 cmd_report() {
   local json=0 jp="" last=0
-  while [ $# -gt 0 ]; do case "$1" in --json) json=1; shift ;; --journal) jp="$2"; shift 2 ;; --last) last="$2"; shift 2 ;; *) die "report: unknown option $1" ;; esac; done
-  local open=0
+  while [ $# -gt 0 ]; do case "$1" in --json) json=1; shift ;; --journal) need_val "$@"; jp="$2"; shift 2 ;; --last) need_val "$@"; last="$2"; shift 2 ;; *) die "report: unknown option $1" ;; esac; done
+  local open=0 seen=never
   if [ -z "$jp" ]; then load_session; jp="$(journal_path 2>/dev/null || true)"; [ -n "$jp" ] || die "report: no journal in this session; pass --journal PATH"
-    local d; for d in "$SDIR"/receipts/*/; do [ -d "$d" ] && ! [ -e "$d/closed" ] && open=$((open+1)); done; fi
-  local H=0 M=0 I=0 B=0 W=0 dH=0 dM=0 dI=0 hdrs
-  if [ -s "$jp" ]; then hdrs="$(grep -E '^### predict ' "$jp" || true)"; [ "$last" -gt 0 ] && hdrs="$(printf '%s\n' "$hdrs" | tail -n "$last")"
+    local d; for d in "$SDIR"/receipts/*/; do [ -d "$d" ] && ! [ -e "$d/closed" ] && open=$((open+1)); done; seen="$(cat "$SDIR/hook-seen" 2>/dev/null || echo never)"; fi
+  local H=0 M=0 I=0 B=0 W=0 U=0 dH=0 dM=0 dI=0 hdrs lintres lintn=0
+  if [ -s "$jp" ]; then
+    lintres="$(cmd_lint "$jp" 2>&1 | tail -1)"; lintn="$(printf '%s' "$lintres" | sed -n 's/.* \([0-9]*\) failures.*/\1/p')"; [ -n "$lintn" ] || lintn=0
+    hdrs="$(grep -E '^### predict ' "$jp" || true)"; [ "$last" -gt 0 ] && hdrs="$(printf '%s\n' "$hdrs" | tail -n "$last")"
+    U="$(grep -c '^- gated: no (close-without-gate)' "$jp" || true)"
     while IFS= read -r h; do [ -n "$h" ] || continue
       local v s; v="$(printf '%s' "$h" | sed -n 's/.*verdict=\([A-Za-z]*\).*/\1/p')"; s="$(printf '%s' "$h" | sed -n 's/.*scope=\([a-z]*\).*/\1/p')"
       case "$v" in HIT) H=$((H+1)); [ "$s" = destructive ] && dH=$((dH+1)) ;; MISS) M=$((M+1)); [ "$s" = destructive ] && dM=$((dM+1)) ;; INCONCLUSIVE) I=$((I+1)); [ "$s" = destructive ] && dI=$((dI+1)) ;; bypass) B=$((B+1)) ;; withdrawn) W=$((W+1)) ;; esac
     done <<< "$hdrs"; fi
   local n=$((H+M+I)) rate="insufficient (n<$PP_K)" window; window="$(basename "$jp" .md)"; [ "$last" -gt 0 ] && window="last $last"
   [ "$n" -ge "$PP_K" ] && rate="$(awk -v h="$H" -v n="$n" 'BEGIN{printf "%.0f%%", 100*h/n}')"
-  if [ "$json" = 1 ]; then printf '{"hit":%s,"miss":%s,"inconclusive":%s,"bypass":%s,"withdrawn":%s,"open":%s,"destructive":{"hit":%s,"miss":%s,"inconclusive":%s},"n":%s,"rate":%s,"window":%s,"journal":%s,"contract":%s,"version":"%s"}\n' "$H" "$M" "$I" "$B" "$W" "$open" "$dH" "$dM" "$dI" "$n" "$(pp_json_str "$rate")" "$(pp_json_str "$window")" "$(pp_json_str "$jp")" "$PP_CONTRACT" "$PP_VERSION"
-  else printf 'predictions: %s HIT / %s MISS / %s INCONCLUSIVE / %s bypass / %s open · scope=destructive %s/%s/%s · n=%s · rate=%s · window=%s · repro: predict report --journal %s\n' "$H" "$M" "$I" "$B" "$open" "$dH" "$dM" "$dI" "$n" "$rate" "$window" "$jp"; fi
+  local lintlabel=ok; [ "$lintn" -gt 0 ] && lintlabel="FAIL($lintn)"
+  if [ "$json" = 1 ]; then printf '{"hit":%s,"miss":%s,"inconclusive":%s,"bypass":%s,"withdrawn":%s,"ungated":%s,"open":%s,"destructive":{"hit":%s,"miss":%s,"inconclusive":%s},"n":%s,"rate":%s,"window":%s,"journal":%s,"lint_failures":%s,"gate_seen":%s,"contract":%s,"version":"%s"}\n' "$H" "$M" "$I" "$B" "$W" "$U" "$open" "$dH" "$dM" "$dI" "$n" "$(pp_json_str "$rate")" "$(pp_json_str "$window")" "$(pp_json_str "$jp")" "$lintn" "$(pp_json_str "$seen")" "$PP_CONTRACT" "$PP_VERSION"
+  else printf 'predictions: %s HIT / %s MISS / %s INCONCLUSIVE / %s bypass / %s ungated / %s open · scope=destructive %s/%s/%s · n=%s · rate=%s · window=%s · lint=%s · gate: seen %s · repro: predict report --journal %s\n' "$H" "$M" "$I" "$B" "$U" "$open" "$dH" "$dM" "$dI" "$n" "$rate" "$window" "$lintlabel" "$seen" "$jp"; fi
+  [ "$lintn" -eq 0 ]
 }
 
 cmd_lint() {
   local jp="${1:-}" fails=0 warns=0 n=0
   if [ -z "$jp" ]; then load_session; jp="$(journal_path 2>/dev/null || true)"; fi
   [ -r "$jp" ] || die "lint: no journal at '${jp:-}'"
-  local ledger; ledger="$(dirname "$jp")/REFUTED.md"; [ "$(basename "$(dirname "$jp")")" = evidence ] || ledger="$(dirname "$(dirname "$jp")")/docs/evidence/REFUTED.md"
-  local id utc scope verdict body line
+  local jroot ledger; jroot="$(git -C "$(dirname "$jp")" rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$jp")")"; ledger="$(ledger_path_for "$jroot")"
+  local id="" utc scope verdict body line
   while IFS= read -r line; do
     if [[ "$line" =~ ^###\ predict\  ]]; then
-      [ -n "${id:-}" ] && lint_entry
+      [ -n "$id" ] && lint_entry
       n=$((n+1)); body=""
-      if [[ "$line" =~ ^###\ predict\ ([A-Za-z0-9-]+)\ ·\ ([0-9T:Z-]+)\ ·\ scope=([a-z]+)\ ·\ verdict=([A-Za-z]+)\ ·\ contract=([0-9]+)$ ]]; then
+      if [[ "$line" =~ ^###\ predict\ ([0-9a-f]{8}-[0-9]+)\ ·\ ([0-9T:Z-]+)\ ·\ scope=([a-z]+)\ ·\ verdict=([A-Za-z]+)\ ·\ contract=([0-9]+)$ ]]; then
         id="${BASH_REMATCH[1]}"; utc="${BASH_REMATCH[2]}"; scope="${BASH_REMATCH[3]}"; verdict="${BASH_REMATCH[4]}"
         [ "${BASH_REMATCH[5]}" = "$PP_CONTRACT" ] || { echo "lint: $id: contract ${BASH_REMATCH[5]} ≠ $PP_CONTRACT"; fails=$((fails+1)); }
       else echo "lint: malformed header: $line"; fails=$((fails+1)); id="?"; verdict="?"; scope="?"; fi
-    elif [ -n "${id:-}" ]; then body="$body$line"$'\n'; fi
+    elif [ -n "$id" ]; then body="$body$line"$'\n'; fi
   done < "$jp"
-  [ -n "${id:-}" ] && lint_entry
+  [ -n "$id" ] && lint_entry
   echo "lint: $n entries, $fails failures, $warns warnings ($jp)"
   [ "$fails" -eq 0 ]
 }
 lint_entry() {
   local obs exp act
   [ "$id" = "?" ] && return
-  if ! printf '%s' "$body" | grep -q '^- graded-by: predict v'; then echo "lint: $id: no grader stamp (verdict written by hand?)"; fails=$((fails+1)); fi
+  printf '%s' "$body" | grep -q '^- graded-by: predict v' || { echo "lint: $id: no grader stamp (verdict written by hand?)"; fails=$((fails+1)); }
   case "$verdict" in
-    HIT|MISS|INCONCLUSIVE)
+    HIT|MISS|INCONCLUSIVE|superseded)
       obs="$(printf '%s' "$body" | sed -n 's/^- observe: `\(.*\)` → expect `\(.*\)` (falsifier.*/\1/p')"; exp="$(printf '%s' "$body" | sed -n 's/^- observe: `\(.*\)` → expect `\(.*\)` (falsifier.*/\2/p')"
       act="$(printf '%s' "$body" | sed -n 's/^- action: `\(.*\)`$/\1/p')"
       [ -n "$obs" ] || { echo "lint: $id: no measurement command"; fails=$((fails+1)); }
       pp_claim_ok "$exp" || { echo "lint: $id: expect '$exp' outside the claim grammar"; fails=$((fails+1)); }
       printf '%s' "$body" | grep -q '^- actual: `' || { echo "lint: $id: verdict without actual"; fails=$((fails+1)); }
+      printf '%s' "$body" | grep -q '^- gated: ' || { echo "lint: $id: no gated line"; fails=$((fails+1)); }
       if [ "$scope" = destructive ]; then
         [ "$(pp_norm "$obs")" != "$(pp_norm "$act")" ] || { echo "lint: $id: destructive entry measures the action itself"; fails=$((fails+1)); }
         [[ "$exp" =~ ^exit= ]] && { echo "lint: $id: destructive entry predicts only an exit code"; fails=$((fails+1)); }
+        printf '%s' "$body" | grep -q '^- gated: no (close-without-gate)' && { echo "lint: $id: WARNING destructive entry closed without passing the gate"; warns=$((warns+1)); }
       else [[ "$exp" =~ ^exit= ]] && { echo "lint: $id: WARNING advisory entry predicts only an exit code"; warns=$((warns+1)); }; fi
       if printf '%s' "$body" | grep -q '^- baseline: ' && [ "$scope" = destructive ]; then
         local b a; b="$(printf '%s' "$body" | sed -n 's/^- baseline: `\(.*\)`$/\1/p')"; a="$(printf '%s' "$body" | sed -n 's/^- actual: `exit=[0-9]* stdout=\(.*\)`.*/\1/p')"
@@ -348,11 +396,10 @@ lint_entry() {
       pp_has_secret_shape "$body" && { echo "lint: $id: secret shape in the entry"; fails=$((fails+1)); }
       if [ "$verdict" = MISS ]; then
         printf '%s' "$body" | grep -q '^- refuted: ' || { echo "lint: $id: MISS without a refuted line (predict ack)"; fails=$((fails+1)); }
-        { [ -r "$ledger" ] && [ "$(grep -c "| $id |" "$ledger")" -eq 1 ]; } || { echo "lint: $id: MISS without exactly one REFUTED.md row"; fails=$((fails+1)); }
-      fi ;;
-    bypass) printf '%s' "$body" | grep -q '^- reason: .' || { echo "lint: $id: bypass without a reason"; fails=$((fails+1)); } ;;
-    superseded) printf '%s' "$body" | grep -q '^- superseded-by: .' || { echo "lint: $id: superseded without superseded-by"; fails=$((fails+1)); } ;;
-    withdrawn) printf '%s' "$body" | grep -q '^- reason: .' || { echo "lint: $id: withdrawn without a reason"; fails=$((fails+1)); } ;;
+        { [ -r "$ledger" ] && [ "$(grep -c "| $id |" "$ledger")" -eq 1 ]; } || { echo "lint: $id: MISS without exactly one REFUTED.md row ($ledger)"; fails=$((fails+1)); }
+      fi
+      [ "$verdict" = superseded ] && { printf '%s' "$body" | grep -q '^- superseded-by: .' || { echo "lint: $id: superseded without superseded-by"; fails=$((fails+1)); }; } ;;
+    bypass|withdrawn) printf '%s' "$body" | grep -q '^- reason: .' || { echo "lint: $id: $verdict without a reason"; fails=$((fails+1)); } ;;
     *) echo "lint: $id: unknown verdict $verdict"; fails=$((fails+1)) ;;
   esac
 }

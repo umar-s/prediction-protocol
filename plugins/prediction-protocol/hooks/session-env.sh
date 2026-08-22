@@ -7,6 +7,6 @@
 set -u
 root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 if [ -n "${CLAUDE_ENV_FILE:-}" ] && [ -x "$root/bin/predict" ]; then
-  printf 'export PREDICT=%q\n' "$root/bin/predict" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+  grep -q '^export PREDICT=' "$CLAUDE_ENV_FILE" 2>/dev/null || printf 'export PREDICT=%q\n' "$root/bin/predict" >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
 fi
 exit 0

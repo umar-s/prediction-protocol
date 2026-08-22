@@ -1,0 +1,17 @@
+# multi-line commands, blocks separated by a line '---'; every block must classify as one-way
+cat <<'SQL' | psql -d app
+DROP TABLE x;
+SQL
+---
+psql <<SQL
+DROP TABLE x;
+SQL
+---
+ssh prod bash <<'REMOTE'
+systemctl restart app
+REMOTE
+---
+cat > run.sh <<'EOF2'
+echo hi
+EOF2
+git push --force origin main

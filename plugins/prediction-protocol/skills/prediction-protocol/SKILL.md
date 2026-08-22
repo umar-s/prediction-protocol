@@ -1,6 +1,6 @@
 ---
 name: prediction-protocol
-description: Prediction before action. A PreToolUse gate refuses one-way shell commands (migrations, force-push, merge, deploy, restart, remote exec, mutating HTTP, grants/secrets, recursive delete) unless the session holds a receipt for that exact command — a hypothesis, a measurement command and a falsifiable claim — and the `predict` CLI opens the receipt, runs the measurement itself and grades HIT / MISS / INCONCLUSIVE into a journal with a refuted-beliefs ledger. Use when a Bash call was denied by "prediction-protocol", when the user says "predict first", "под протоколом прогнозов", "запиши прогноз", "predict on", or when a skill's routing (task phases 5/7/8, loop-foundry runners) calls for receipts. Not for read-only commands, tests, builds or lint — those are already predictions with a deterministic verdict.
+description: Prediction before action — a fail-closed PreToolUse gate refuses one-way shell commands (migrations, force-push, merge, deploy, restart, remote exec, mutating HTTP, secrets, recursive delete) without a receipt for that exact command, and the `predict` CLI grades HIT / MISS / INCONCLUSIVE itself. Use when a Bash call was denied by "prediction-protocol", when the user says "predict first", "под протоколом прогнозов", "predict on", or when a skill's routing (task phases 5/7/8, loop-foundry runners) calls for receipts. Not for read-only commands, tests, builds or lint.
 ---
 
 # prediction-protocol
@@ -14,133 +14,131 @@ against "I got lucky" — never a switch that flips on its own.
 
 ```
 HYPOTHESIS            what you believe about the system         --hypothesis
-PREDICTED OBSERVABLE  a measurement command + a closed claim    --observe / --expect
+PREDICTED OBSERVABLE  a read-only measurement + a closed claim  --observe / --expect
 FALSIFIER             derived: the claim's complement, same command
 ACTION                the command the gate is about to pass      --action
 ACTUAL · VERDICT      written by `predict close`, never by you
 ```
 
-## Resolve the plugin root once
+## Resolve the CLI once
 
 The plugin's SessionStart hook exports `PREDICT` — the absolute path of
-`bin/predict` — into the session's Bash environment, so any skill can call
-it without knowing where the plugin is installed; an unset `PREDICT` is an
-honest "plugin not installed". Resolve once in a bash step and use the
-resolved value afterwards — the Read tool and your memory do not expand
-`${…}`:
+`bin/predict` — into the session's Bash environment. An unset `PREDICT` is an
+honest "plugin not installed"; every deny reason also carries the path.
+Resolve once in a bash step and use the value afterwards — the Read tool does
+not expand `${…}`:
 
 ```bash
-P="${PREDICT:-${CLAUDE_PLUGIN_ROOT:-}/bin/predict}"; [ -x "$P" ] && "$P" version || echo "predict-gate: absent (PREDICT unset — prediction-protocol not installed)"
-ROOT="$(dirname "$(dirname "$P")")"     # for the references below
+P="${PREDICT:?prediction-protocol not installed}"; "$P" version
+ROOT="$(dirname "$(dirname "$P")")"      # for the references below
 ```
 
-Every deny reason also carries the absolute path to `predict`, so a session
-that never loaded this file can still comply.
-
-## The three commands (plus on/off)
+## The commands
 
 ```bash
-"$P" on <journal> [--task DEV-512 | --loop <name>] [--also 'make deploy']   # put the session under the protocol; prints predict-gate: active|broken
+"$P" on <journal> [--task | --loop] [--also 'make deploy']...   # session under the protocol → predict-gate: active|broken
 "$P" open --action '<exact command>' --hypothesis '<one line>' \
-          --observe '<measurement command, not the action>' --expect '<claim>' [--scope advisory] [--baseline]
-<run the exact same command once>                                           # the gate matches it against the receipt
-"$P" close <id>                                                             # runs the measurement, grades, writes the journal
-"$P" ack <id> --refuted '<the belief that turned out false>'                # after a MISS — clears the halt, writes REFUTED.md
-"$P" report                                                                  # the only source of the predictions: line
-"$P" off --reason '<why>'                                                    # the bypass: recorded, not hidden
+          --observe '<read-only measurement, not the action>' --expect '<claim>' [--scope advisory] [--baseline]
+<run the exact same command once>                               # the gate matches it to the receipt; PostToolUse marks it fired
+"$P" close <id>                                                 # runs the measurement, grades, writes the journal
+"$P" ack <id> --refuted '<the belief that was false>' --where '<paths or systems>'   # after a MISS: clears the halt, writes REFUTED.md
+"$P" retry <id> [--observe '<fixed measurement>'] [--expect '…'] # after INCONCLUSIVE: re-measure (the old entry is superseded)
+"$P" withdraw <id> --reason '<why>'                             # an open receipt whose action never ran, or an INCONCLUSIVE one
+"$P" report                                                      # the only source of the predictions: line
+"$P" off --reason '<why>'                                        # the bypass: recorded as such, never hidden
 ```
 
-Claims are a closed grammar: `exit=N` · `stdout==LIT` · `stdout~=ERE` ·
-`stdout-in=A..B` · `lines=N` · `http=NNN` · `count=N`. Anything else is
-refused at `open`, not linted later. For a destructive receipt the
-measurement must be a **different command** than the action and the claim
-cannot be only an exit code — "the action will exit 0" is a tautology, not a
-prediction about the system. Details, examples and the journal format:
-`Read "$ROOT/skills/prediction-protocol/references/journal.md"` (load it
-when you write your first receipt in a session, not before).
+Claims are a closed grammar: `count=N` · `stdout==LIT` · `stdout~=ERE` ·
+`http=NNN` · `lines=N` · `stdout-in=A..B` · `exit=N`. Anything else is
+refused at `open`. For a destructive receipt (the default) the measurement
+must be a **different, read-only command** than the action — the CLI
+classifies `--observe` and refuses a one-way one — and the claim cannot be
+only an exit code: "the action will exit 0" is a tautology. A secret-shaped
+value in any field is refused; reference it as `$VAR`. Details and examples:
+`Read "$ROOT/skills/prediction-protocol/references/journal.md"` (load it when
+you write your first receipt in a session, not before).
 
 ## What the gate does
 
-The hook sees only the `Bash` tool (Bash tool only — MCP tools and
-PowerShell are outside 1.x, stated, not assumed) and classifies the command
-by its verb after stripping `sudo`/`env`/`VAR=`/`time`/`timeout` and
-splitting on `;`, `&&`, `||`, `|`. A project's own wrappers (`make deploy`,
+The hook sees the `Bash` tool only (MCP tools and PowerShell are outside 1.x,
+stated, not assumed). It classifies the command by its verb after stripping
+`sudo`/`env`/`VAR=`/`time`/`timeout`/`xargs`, splitting on `;`, `&&`, `||`,
+`|`, `&` and newlines outside quotes, dropping heredoc bodies and unwrapping
+`bash -c`/`su -c`/`eval`. A project's own wrappers (`make deploy`,
 `bash scripts/release.sh`) are declared once with `predict on --also` from
-the consuming `CLAUDE.md` bindings. Then:
+the consuming `CLAUDE.md` bindings. Calls to `predict` itself are never
+classified. Then:
 
-| context | outside the protocol (`predict on` not run) | under the protocol, no receipt | receipt matches this exact command |
+| context | outside the protocol | under it, no receipt | receipt matches this exact command |
 |---|---|---|---|
-| interactive session | **ask** — the owner's rule: a human answers at the irreversible | **deny** + the `predict open …` recipe | **ask**, with the prediction in the prompt — the human click stays |
+| interactive | **ask** — a human answers at the irreversible | **deny** + the `predict open …` recipe | **ask**, with the prediction in the prompt |
 | subagent (`agent_id`) | ask | **deny**: report the command as a finding; do not write a receipt | deny — a subagent does not open one-way doors |
 | headless (`claude -p`) | silent — the runner's permissions decide | deny + recipe | silent pass |
 
-One receipt is one tool call: the gate marks it consumed; the same command
-again needs a new `open`. One receipt in flight: another one-way command
-while a consumed receipt is not closed is denied. A receipt older than 30
-minutes, or edited after it was opened, is denied. Every gate error is a
-deny (the platform itself is fail-open on a broken hook — the gate carries
-its own trap and deadline). The hook never emits `allow`.
+One receipt is one tool call: the gate marks it consumed, the PostToolUse hook
+marks it fired, and `close` refuses a consumed receipt that never fired (you
+declined the prompt, or another hook denied it — `withdraw` it). One receipt in
+flight: any other one-way command while a consumed receipt is not closed is
+denied. A receipt older than 30 minutes, edited after it was opened, or
+opened by hand is denied; editing the state under
+`~/.local/state/prediction-protocol/` through Edit/Write or Bash is itself
+denied. A deny blocks by both channels (deny JSON and exit 2); every gate
+error on a one-way command is a deny; the hook never emits `allow`.
 
 ## After the verdict
 
 - **HIT** — continue.
-- **MISS** (confirmed by a second measurement) — every one-way action in the
-  session is halted until `predict ack <id> --refuted '…'` names the belief
-  in one line. Then fix the spec or your model of the system; the ack is what
-  lets the next command through, the fix is what the review checks.
-- **INCONCLUSIVE** (the measurement did not run or returned nothing
-  comparable; or the result flapped between two runs) — halts the same way,
-  until `predict retry <id>` (same receipt, new measurement) or
+- **MISS** (confirmed by a second measurement, both recorded) — every
+  one-way action in the session is halted until `predict ack <id> --refuted
+  '…' --where '…'` names the belief and where it held. Nothing else clears a
+  MISS halt — not a later HIT, not `predict on`, not `off`.
+- **INCONCLUSIVE** (the measurement exited non-zero, was not found, timed out,
+  returned nothing comparable, or flapped between the two runs) — halts the
+  same way until `predict retry <id> [--observe …]` re-measures or
   `predict withdraw <id> --reason '…'`. It counts in the denominator.
 
 `predict report` prints `predictions: H HIT / M MISS / I INCONCLUSIVE / B
-bypass / O open · scope=destructive … · n=… · rate=…`; below n=20 the rate
-is `insufficient`, not a percentage. Paste that line verbatim where an
-evidence block asks for it — it is admissible only next to a
+bypass / U ungated / O open · scope=destructive … · n=… · rate=… · lint=… ·
+gate: seen <utc>`; below n=20 the rate is `insufficient`. Paste that line
+verbatim where an evidence block asks for it — admissible only next to the
 `predict-gate: active` line from `predict on`.
 
 ## Where receipts are required, advised, or noise
 
-- **Required (the gate enforces):** migration runners and SQL clients with
-  writes or opaque input, force-push / branch delete / merge / release,
-  `kubectl`/`helm`/`terraform` mutations, service restart/stop, `ssh host
-  <cmd>` and `docker|kubectl exec`, mutating HTTP off localhost, cloud and
-  secret mutations, package publish, recursive delete outside `/tmp`.
+- **Required (the gate enforces):** migration runners; SQL/KV clients with
+  writes or opaque input; force-push, branch delete, merge, release; kubectl
+  / helm / terraform / docker / systemctl mutations; `ssh host <cmd>`,
+  `docker|kubectl exec`, stdin-fed shells; mutating HTTP off localhost; cloud,
+  grant and secret mutations; package publish; recursive delete outside `/tmp`.
 - **Advisory (`--scope advisory`, no gate):** live verification, debugging,
-  recovery, exploring an unknown system — write the receipt **before** you
-  look. In `task` phase 7 every `live` DoD item is one advisory cycle and the
-  DoD grade cites `predict <id>`; an item without an id is an item without
-  evidence.
+  recovery — write the receipt **before** you look. In `task` phase 7 every
+  `live` DoD item is one advisory cycle and the DoD grade cites `predict <id>`.
 - **Noise (excluded):** read-only commands, tests, builds, lint, local edits,
-  plain `git push`, `rm` inside `/tmp`. A test is already a prediction with a
-  deterministic verdict.
+  plain `git push`, dry runs, `--help`, `rm` inside `/tmp`.
 
-**Wrapping is a bypass.** Moving a denied command into a script file, a
-`make` target or an `ssh`/`bash -c` string to dodge the classifier is the
-same as `predict off` without the record; the review reads the journal and
-the diff, and a script that appeared for that reason is a finding. If you
-genuinely must act without a prediction, `predict off --reason '…'` — it is
-written to the journal as `bypass`, and one-way commands ask instead of
-requiring receipts until `predict on` again.
+**Wrapping is a bypass.** Moving a denied command into a script, a `make`
+target or an `ssh`/`bash -c` string to dodge the classifier is `predict off`
+without the record; the review reads the journal and the diff, and a script
+that appeared for that reason is a finding. If you genuinely must act without
+a prediction, `predict off --reason '…'`: written to the journal as `bypass`,
+and one-way commands ask instead of requiring receipts until `predict on`.
 
 ## Discipline
 
-- You author hypothesis, observable and claim. The CLI **never writes** them
-  for you, and you never write `actual` or `verdict`: only entries with a
-  grader stamp pass `predict lint`. Editing the session state under
-  `~/.local/state/prediction-protocol/` by hand is a bypass, not a shortcut —
-  the gate checks the receipt's hash.
-- Report honestly: a denied command is not "permission denied" — it is a
-  missing receipt; write it and re-issue the command once. A halt is not an
-  error to work around; it is the protocol working.
-- `predict on` prints `predict-gate: active v… (selftest: …)` or
-  `broken …`. The line is the proof the gate exists in this session; without
-  it, a `predictions:` line is a claim.
-- The journal (`docs/evidence/<journal>.md`, `loops/evidence/<loop>.md` for
-  loops) and `docs/evidence/REFUTED.md` are committed with the task at close.
-  Open receipts never reach the repository. Read `REFUTED.md` before touching
-  the paths it names — that ledger is the one thing here that outlives a
-  session.
-- Platform facts the gate relies on, and the checklist for any hook in this
-  line: `Read "$ROOT/skills/prediction-protocol/references/hook-engineering.md"`
+- You author hypothesis, observable and claim; you never write `actual` or
+  `verdict` — only entries with a grader stamp pass `predict lint`, and
+  `close`/`report` run it.
+- A denied command is not "permission denied" — it is a missing receipt: write
+  it and re-issue the command once. A halt is the protocol working.
+- `predict on` prints `predict-gate: active v… (selftest: …)` or refuses with
+  `broken`. That line is the proof the gate exists in this session; `report`
+  adds `gate: seen <utc>` once the platform has actually fired it.
+- The journal (`docs/evidence/<journal>.md`; `loops/evidence/<loop>.md` for
+  loops) and `docs/evidence/REFUTED.md` are committed with the task at close;
+  open receipts never reach the repository. Read `REFUTED.md` before touching
+  the paths it names — it is the one thing here that outlives a session.
+- Headless runners: export one `PP_SESSION` around both `predict on` and
+  `claude -p --session-id <uuid>` so the CLI and the hook key the same state.
+- Platform facts and the checklist for any hook in this line:
+  `Read "$ROOT/skills/prediction-protocol/references/hook-engineering.md"`
   (only when editing or debugging the hook).

@@ -1,0 +1,30 @@
+# multi-line commands, blocks separated by a line '---'; every block must NOT classify as one-way
+cat <<EOF2 > notes.md
+git push --force origin main is forbidden here.
+EOF2
+---
+cat > deploy.sql <<'SQL'
+DROP TABLE x;
+SQL
+---
+cat > scripts/deploy.sh <<'EOF2'
+#!/bin/bash
+kubectl rollout restart deploy/app
+EOF2
+---
+cat > Makefile <<EOF2
+clean:
+	rm -rf build
+EOF2
+---
+cat > .github/workflows/deploy.yml <<EOF2
+run: |
+  terraform apply -auto-approve
+EOF2
+---
+git commit -m "$(cat <<EOF2
+feat: cleanup
+
+rm -rf build no longer needed
+EOF2
+)"

@@ -16,10 +16,15 @@ Bash` and with `--dangerously-skip-permissions`. Re-run
 | exit 0, empty stdout | no opinion; the normal permission flow decides (this is not an allow) |
 
 So the platform is **fail-open on a broken hook**, and "fail-closed" has to
-be built into the script: an `ERR` trap that prints a deny and exits 2, an
-inner deadline shorter than the `timeout` in `hooks.json` that turns an
-overrun into a deny, one explicit path to a silent exit 0, no network, no
-locks. Decisions compose across hooks as most-restrictive-wins
+be built into the script: an outer wrapper that needs nothing but bash to
+answer deny (missing `lib/`, missing `python3`/`jq`, missing `timeout` — a
+bash watchdog replaces it), a pure-bash vocabulary pre-filter so a
+token-free command depends on nothing that can fail, an `ERR` trap that
+prints a deny and exits 2, an inner deadline shorter than the `timeout` in
+`hooks.json` that turns an overrun into a deny, every control byte escaped
+in the JSON (an unescaped 0x1b is invalid JSON — the command runs), and a
+deny that blocks by BOTH channels: deny JSON on stdout and the reason on
+stderr with exit 2. Decisions compose across hooks as most-restrictive-wins
 (`deny` > `defer` > `ask` > `allow`); this gate never emits `allow` — with a
 receipt it answers `ask` (interactive) or stays silent (headless), so the
 human click on a one-way door is never removed by a hook.
@@ -54,13 +59,20 @@ failure). No mode flag is exchanged between plugins.
 - `export LC_ALL=C` before any comparison — `tr_TR` breaks case folding.
 - Reach the script through `${CLAUDE_PLUGIN_ROOT}`, never an install prefix;
   never depend on `cwd` for state (the session id is the key).
-- Parse stdin with `python3`, then `jq`, else answer `ask` ("cannot parse") —
-  never silent. Test with synthetic stdin: every decision-table cell, a
-  fixture **with** `agent_id`, malformed JSON, an empty PATH for parsers.
+- Parse stdin with `python3`, then `jq`; if neither is there and the call
+  carries a one-way token, deny ("cannot parse") — never silent. Test with
+  synthetic stdin: every decision-table cell, a fixture **with** `agent_id`,
+  malformed JSON, a PATH without parsers, a PATH without `timeout`, a
+  command with a control byte (pipe the output through a JSON parser).
 - Every error path ends in deny JSON or exit 2 **when the command is
   one-way**; an irrelevant command on a broken gate stays silent so one
   bug does not lock every project the owner opens.
-- The word `allow` does not appear in the hook (lint grep).
+- The word `allow` does not appear in the hook (word-match lint grep,
+  comments excluded).
+- A liveness stamp: the hook touches `hook-seen` in the session's state dir
+  when it exists, so `predict status`/`report` can say whether the platform
+  ever fired it. `predict on`'s selftest proves the script, not the
+  registration.
 - The version is in every reason; the platform table above is re-verified
   with `tests/platform-probe.sh` before a release.
 - `PostToolUse` cannot block or undo — grading lives in the CLI, not in a

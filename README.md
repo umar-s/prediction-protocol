@@ -30,8 +30,9 @@ predict close 3f9a1c20-1                # runs the measurement, grades, appends 
 predict report                          # predictions: 1 HIT / 0 MISS / 0 INCONCLUSIVE / 0 bypass / 0 open · …
 ```
 
-Without a receipt the command is **denied** with the exact `predict open …`
-recipe in the reason. Outside the protocol (no `predict on`) a one-way
+Without a receipt the command is **denied** — deny JSON on stdout and the
+reason on stderr with exit 2, so a defect in one channel never becomes an
+allow — with the exact `predict open …` recipe in the reason. Outside the protocol (no `predict on`) a one-way
 command **asks** — the owner's "ask only at the irreversible" as a mechanism
 rather than a prose rule. In headless runs the gate stays silent outside the
 protocol and denies inside it. Subagents never open one-way doors: they are
@@ -43,19 +44,26 @@ told to report the command as a finding.
 | subagent | ask | deny: report as a finding | deny |
 | headless (`claude -p`) | silent | deny + recipe | silent |
 
-A **MISS** (confirmed by a second measurement) halts every one-way action
-until `predict ack <id> --refuted '…'` names the belief in one line and
-writes it to `docs/evidence/REFUTED.md` — the file the next session reads
-before touching the same paths. **INCONCLUSIVE** (the measurement did not
-run, or flapped) halts the same way until `predict retry` or `predict
-withdraw`. `predict off --reason '…'` is the bypass: recorded in the journal
+A **MISS** (confirmed by a second measurement, both recorded) halts every
+one-way action until `predict ack <id> --refuted '…' --where '…'` names the
+belief and where it held, and writes it to `docs/evidence/REFUTED.md` — the
+file the next session reads before touching the same paths; nothing else
+clears that halt. **INCONCLUSIVE** (the measurement did not run cleanly, or
+flapped) halts the same way until `predict retry` re-measures or `predict
+withdraw`. One receipt is one tool call: the gate marks it consumed, a
+PostToolUse hook marks it fired, and `close` refuses a receipt whose action
+never ran. `predict off --reason '…'` is the bypass: recorded in the journal
 as `bypass`, never hidden.
 
 ## What is gated
 
 Classified from the command string by verb, after stripping `sudo`, `env`,
-`VAR=…`, `time`, `timeout` and splitting on `;`, `&&`, `||`, `|`; `bash -c`
-and `eval` are unwrapped. Migration runners (alembic, rails db:, artisan,
+`VAR=…`, `time`, `timeout`, `xargs` and each tool's global options (`git -C`,
+`kubectl -n`, `aws --profile`), splitting on `;`, `&&`, `||`, `|`, `&` and
+newlines outside quotes, dropping heredoc bodies and lifting `$(…)`;
+`bash -c`, `su -c` and `eval` are unwrapped, stdin-fed shells and
+interpreters are opaque executors, clustered flags (`psql -tAc`, `curl -sX`)
+are read, dry runs and `--help` pass. Migration runners (alembic, rails db:, artisan,
 prisma, flyway, liquibase, manage.py, goose, …); SQL/KV clients with writes,
 `-f`/`<`/heredoc input or a pipe; `git push --force*`/`--delete`, `branch
 -D`, `gh pr merge`, `glab mr merge`, `gh release create`; `kubectl`, `helm`,
@@ -66,20 +74,25 @@ secret` mutations; `npm publish`, `twine upload`, `docker push`; `rm -r`
 outside `/tmp`, `find -delete`, `dd of=/dev/`, `mkfs`. Read-only commands,
 tests, builds, lint, plain `git push`, `git reset --hard`, `rm` in `/tmp`
 pass. A project's own wrappers (`make deploy`) are declared with `predict on
---also`. The corpora in `tests/corpus/` are the contract — 100 must-deny and
-100 must-pass lines.
+--also`; calls to `predict` itself are never classified; writes into the
+protocol's own state are. The corpora in `tests/corpus/` are the contract
+(`classify-corpus.sh` prints the count).
 
 ## Fail-closed, structurally
 
 The platform is fail-open: a hook that exits 1, prints broken JSON or
 overruns its timeout lets the command run (verified on Claude Code 2.1.239,
-`tests/platform-probe.sh`). The gate therefore carries an `ERR` trap that
-answers deny, an inner deadline shorter than its `hooks.json` timeout, one
-explicit path to a silent exit, no network, and never emits `allow`. Receipt
-state lives outside the repository under
+`tests/platform-probe.sh`). The gate therefore has an outer wrapper that
+needs nothing but bash to answer deny, a pure-bash vocabulary pre-filter, an
+`ERR` trap that answers deny, an inner deadline shorter than its
+`hooks.json` timeout (GNU `timeout`, `gtimeout`, or a bash watchdog), every
+control byte escaped in its JSON, no network, and never emits `allow`.
+Receipt state lives outside the repository under
 `~/.local/state/prediction-protocol/sessions/<session_id>/`, keyed by the
-session id the platform passes to the hook — no `TASK-ID`, no `cwd`
-dependence, nothing to commit by accident.
+session id the platform passes to the hook (or the `PP_SESSION` a runner
+exports around `claude -p --session-id`) — no `TASK-ID`, no `cwd`
+dependence, nothing to commit by accident, and nothing the model may edit:
+Edit/Write into it is denied by a second hook, Bash writes are classified.
 
 ## Layout
 
@@ -89,6 +102,8 @@ plugins/prediction-protocol/
   skills/prediction-protocol/references/journal.md          # claims, entry format, REFUTED.md, report line, lint
   skills/prediction-protocol/references/hook-engineering.md # platform facts + checklist for any hook in the line
   hooks/hooks.json · hooks/predict-gate.sh   # the gate (matcher "Bash", timeout 15)
+  hooks/predict-fired.sh                     # PostToolUse: marks a consumed receipt as fired
+  hooks/predict-state-guard.sh               # PreToolUse on Edit/Write: the state dir is not editable
   hooks/session-env.sh                       # SessionStart: exports PREDICT=<plugin>/bin/predict for consumers
   bin/predict                                # on | off | status | open | close | ack | retry | withdraw | report | lint | classify | selftest
   lib/classify.sh · lib/common.sh            # the classifier; state, claims, redaction
@@ -102,9 +117,11 @@ plugins/prediction-protocol/
 /plugin install prediction-protocol@devpowers
 ```
 
-Linux/macOS, the `Bash` tool only; `python3` or `jq` for the hook's stdin
-(neither → the gate asks, never silent). MCP tools and PowerShell are
-outside 1.x by declaration.
+Linux, the `Bash` tool only; `python3` or `jq` for the hook's stdin (neither
+→ a one-way call is denied, never silent); GNU `timeout` or `gtimeout`
+preferred, a bash watchdog otherwise. macOS is untested in 1.0 (the suite
+runs on Linux CI only). MCP tools and PowerShell are outside 1.x by
+declaration.
 
 ## Consumers
 
@@ -114,17 +131,19 @@ outside 1.x by declaration.
   receipts for merge and deploy in phase 8 with the `predict report` line in
   the evidence block, `REFUTED.md` read in phase 0. Works without the plugin:
   the lines print `predict-gate: absent`.
-- **loop-foundry** — `predict on <loop> --loop` from `run.sh`, `predict
-  report --json` merged into the tick record as a second signal on the
-  shadow → gated → autonomous ladder, a halt as a hook-enforced stop.
+- **loop-foundry** — the runner exports one `PP_SESSION=<uuid>`, runs
+  `predict on <loop> --loop`, then `claude -p --session-id <uuid>`; `predict
+  report --json` is merged into the tick record as a second signal on the
+  shadow → gated → autonomous ladder, and a halt is a hook-enforced stop.
 
 ## Checks
 
 ```bash
 bash scripts/lint.sh                                   # written rules as greps: versions, matcher, trap, deadline, no allow, SKILL/references pins, README parity
-bash plugins/prediction-protocol/tests/classify-corpus.sh
-bash plugins/prediction-protocol/tests/run.sh          # 65 negative controls: the decision table, receipt lifecycle, halt, redaction, lint, error paths
+bash plugins/prediction-protocol/tests/classify-corpus.sh   # the classifier contract (single-line and multi-line corpora)
+bash plugins/prediction-protocol/tests/run.sh          # negative controls: the decision table, receipt lifecycle, halt, redaction, lint, error paths, the corpora through the gate
 bash plugins/prediction-protocol/tests/platform-probe.sh   # through Claude Code itself; manual, at release
+claude plugin validate plugins/prediction-protocol
 ```
 
 ## License
