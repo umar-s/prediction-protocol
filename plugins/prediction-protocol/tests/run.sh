@@ -7,7 +7,7 @@ here="$(cd "$(dirname "$0")" && pwd)"; P="$(cd "$here/.." && pwd)"
 gate="$P/hooks/predict-gate.sh"; predict="$P/bin/predict"; fired="$P/hooks/predict-fired.sh"; guard="$P/hooks/predict-state-guard.sh"
 T="$(mktemp -d)"; trap 'cd /; rm -rf "$T"' EXIT
 export PP_STATE_DIR="$T/state" PP_SESSION="test-session-A" PP_ENTRYPOINT=cli HOME="$T/home" PP_TEST=1; mkdir -p "$HOME"
-unset PP_NOW CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID
+unset PP_NOW CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID PP_HARNESS PLUGIN_ROOT CODEX_SESSION_ID
 pass=0 fail=0
 # credential-shaped strings are assembled at runtime so no tracked line carries one
 fake_aws()    { printf 'AKIA%s' "ABCDEFGH" "" | tr -d ' '; printf '%s' "IJKLMNOP"; }
@@ -46,6 +46,20 @@ gate s0 'git push --force origin main' ",\"permission_mode\":\"default\",\"trans
 gate s0 'git push --force origin main' ",\"permission_mode\":\"default\",\"transcript_path\":\"$T/tr-back.jsonl\""; check "oos transcript toggled back to default → ask (last marker wins)" 'is_ask'
 gate s0 'git push --force origin main' ",\"permission_mode\":\"default\",\"transcript_path\":\"$T/does-not-exist.jsonl\""; check "oos unreadable transcript → ask (not delegated)" 'is_ask'
 OUT="$(stdin s0 'git push --force' | sed 's/"Bash"/"Read"/' | bash "$gate")"; check "non-Bash tool → silent" '[ -z "$OUT" ]'
+
+echo "# 2b Codex harness: the ask cells deny (Codex has no hook ask), the rest of the table is unchanged"
+CX=',"turn_id":"t-1","model":"gpt-6-astra"'
+gate s0 'git push --force origin main' "$CX"; check "codex oos interactive one-way → deny (cannot ask), both channels" 'is_deny && printf "%s" "$OUT" | grep -q "cannot ask" && printf "%s" "$ERR" | grep -q "cannot ask"'
+gate s0 'ls -la' "$CX"; check "codex oos irrelevant → silent" 'is_silent'
+gate s0 'git push --force origin main' "$CX"',"permission_mode":"bypassPermissions"'; check "codex exec (approval never arrives as bypassPermissions) oos → silent" 'is_silent'
+PLUGIN_ROOT=/x gate s0 'git push --force origin main'; check "PLUGIN_ROOT in the environment alone marks Codex → deny" 'is_deny'
+PP_HARNESS=codex gate s0 'git push --force origin main'; check "PP_HARNESS=codex without markers → deny" 'is_deny'
+PP_HARNESS=claude gate s0 'git push --force origin main' "$CX"; check "PP_HARNESS=claude overrides the markers → ask" 'is_ask'
+CLAUDE_CODE_ENTRYPOINT=sdk-cli gate s0 'git push --force origin main' "$CX"; check "codex ignores an inherited CLAUDE_CODE_ENTRYPOINT=sdk-cli → still deny" 'is_deny'
+PP_ENTRYPOINT=headless gate s0 'git push --force origin main' "$CX"; check "codex runner PP_ENTRYPOINT=headless oos → silent" 'is_silent'
+gate s0 'git push --force origin main' "$CX"",\"permission_mode\":\"default\",\"transcript_path\":\"$T/tr-auto.jsonl\""; check "codex: transcript markers are content, not consulted → deny" 'is_deny'
+gate s0 'git push --force origin main' "$CX"',"agent_id":"a1"'; check "codex subagent oos → deny" 'is_deny'
+OUT="$(stdin s0 'git push --force origin main' "$CX" | sed 's/"Bash"/"Read"/' | bash "$gate")"; check "codex non-Bash tool → silent" '[ -z "$OUT" ]'
 
 echo "# 3 predict on / selftest / grammar"
 mkdir -p "$T/repo" && git -C "$T/repo" init -q && cd "$T/repo"
@@ -199,6 +213,17 @@ stdin dl-1 'rm -rf ./dl' '' td | PP_SESSION="dl-1" bash "$fired"; mkdir -p dl; r
 PP_SESSION="dl-1" gate dl-1 'rm -rf ./dl' ',"permission_mode":"auto"'; check "delegated, receipt spent → deny again (one-shot)" 'is_deny'
 PP_SESSION="dl-1" gate dl-1 'rm -rf ./dl' ',"permission_mode":"auto","agent_id":"a1"'; check "delegated subagent under the protocol → deny" 'is_deny'
 
+echo "# 10d Codex under the protocol: deny without a receipt, silent pass with one"
+PP_SESSION="cx-1" "$predict" on CX-1 --task >/dev/null
+PP_SESSION="cx-1" gate cx-1 'git push --force origin main' "$CX"; check "codex interactive, under the protocol, no receipt → deny + recipe" 'is_deny && printf "%s" "$OUT" | grep -q "open --action"'
+X="$(PP_SESSION="cx-1" "$predict" open --action 'rm -rf ./cx' --hypothesis h --observe 'ls -d cx 2>/dev/null | wc -l' --expect 'count=0' | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION="cx-1" gate cx-1 'rm -rf ./cx' "$CX" tx; check "codex interactive with a matching receipt → silent pass, receipt consumed (the receipt is the witness)" 'is_silent && [ -e "$PP_STATE_DIR/sessions/cx-1/receipts/$X/consumed" ]'
+stdin cx-1 'rm -rf ./cx' "$CX" tx | PP_SESSION="cx-1" bash "$fired"; mkdir -p cx; rm -rf ./cx; PP_SESSION="cx-1" "$predict" close "$X" >/dev/null; check "codex receipt closes → HIT" '[ $? -eq 0 ]'
+PP_SESSION="cx-1" gate cx-1 'rm -rf ./cx' "$CX"; check "codex: spent receipt → deny (one-shot)" 'is_deny'
+PP_SESSION="cx-1" gate cx-1 'rm -rf ./cx' "$CX"',"agent_id":"a1"'; check "codex subagent under the protocol → deny" 'is_deny'
+PP_SESSION="cx-1" gate cx-1 'git push --force origin main' "$CX"',"permission_mode":"bypassPermissions"'; check "codex exec under the protocol, no receipt → deny + recipe" 'is_deny && printf "%s" "$OUT" | grep -q "open --action"'
+grep -nwi 'allow' "$gate" | grep -v ':[0-9]*:[[:space:]]*#' | grep -v 'never' >/dev/null && bad "the Codex deny text uses the word allow" || ok
+
 echo "# 11 ids and journals"
 PP_SESSION="nightly-2026-08-21" "$predict" on nightly --loop >/dev/null; PP_SESSION="nightly-2026-08-22" "$predict" on nightly --loop >/dev/null
 A="$(PP_SESSION="nightly-2026-08-21" "$predict" open --scope advisory --action x --hypothesis h --observe 'echo 1' --expect count=1 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
@@ -249,13 +274,30 @@ check "every must-pass line is silent at the gate" '[ $miss -eq 0 ]'
 echo "# 15 hooks: session-env, fired, state guard"
 E="$T/env"; : > "$E"; CLAUDE_ENV_FILE="$E" CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; check "SessionStart exports PREDICT" 'grep -q "^export PREDICT=.*bin/predict$" "$E"'
 CLAUDE_ENV_FILE="$E" CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; check "SessionStart is idempotent" '[ "$(grep -c "^export PREDICT=" "$E")" -eq 1 ]'
-CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh"; check "session-env without CLAUDE_ENV_FILE exits 0" '[ $? -eq 0 ]'
+CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh" >/dev/null; check "session-env without CLAUDE_ENV_FILE exits 0" '[ $? -eq 0 ]'
 OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/%s/state","content":"x"}}' "$PP_STATE_DIR" "$S" | bash "$guard" 2>/dev/null)"; GRC=$?; check "Write into the state dir → deny" 'is_deny'
 OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x"}}' | bash "$guard")"; GRC=$?; check "Write elsewhere → silent" 'is_silent'
 OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/doc.md","content":"state lives under ~/.local/state/prediction-protocol/sessions/<uuid>/ and %s/sessions/x"}}' "$PP_STATE_DIR" | bash "$guard")"; GRC=$?; check "Write elsewhere whose CONTENT names the state dir → silent (path, not content)" 'is_silent'
 OUT="$(printf '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"%s/sessions/%s/state.ipynb"}}' "$PP_STATE_DIR" "$S" | bash "$guard" 2>/dev/null)"; GRC=$?; check "NotebookEdit into the state dir → deny" 'is_deny'
 OUT="$(printf '{"tool_name":"MultiEdit","tool_input":{"edits":[{"old_string":"a","new_string":"b"}],"file_path":"%s/sessions/%s/state"}}' "$PP_STATE_DIR" "$S" | bash "$guard" 2>/dev/null)"; GRC=$?; check "MultiEdit with file_path after other keys → deny" 'is_deny'
 echo '{not json' | bash "$fired"; check "fired hook never fails" '[ $? -eq 0 ]'
+
+echo "# 15b Codex: apply_patch through the state guard, the context path, the CLI's session"
+ap(){ printf '{"session_id":"s","tool_name":"apply_patch","tool_input":{"command":%s},"tool_use_id":"ap1"}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")"; }
+OUT="$(ap "$(printf '*** Begin Patch\n*** Update File: %s/sessions/%s/state\n@@\n-active=1\n+active=0\n*** End Patch' "$PP_STATE_DIR" "$S")" | bash "$guard" 2>/dev/null)"; GRC=$?; check "apply_patch Update File into the state dir → deny" 'is_deny'
+OUT="$(ap "$(printf '*** Begin Patch\n*** Add File: %s/sessions/%s/receipts/x/closed\n+1\n*** End Patch' "$PP_STATE_DIR" "$S")" | bash "$guard" 2>/dev/null)"; GRC=$?; check "apply_patch Add File into the state dir → deny" 'is_deny'
+OUT="$(ap "$(printf '*** Begin Patch\n*** Update File: notes.md\n*** Move to: %s/sessions/%s/state\n@@\n-a\n+b\n*** End Patch' "$PP_STATE_DIR" "$S")" | bash "$guard" 2>/dev/null)"; GRC=$?; check "apply_patch Move to the state dir → deny" 'is_deny'
+OUT="$(ap "$(printf '*** Begin Patch\n*** Delete File: ~/.local/state/prediction-protocol/sessions/x/state\n*** End Patch')" | bash "$guard" 2>/dev/null)"; GRC=$?; check "apply_patch Delete File under the default state root → deny" 'is_deny'
+OUT="$(ap "$(printf '*** Begin Patch\n*** Add File: docs/notes.md\n+state lives under %s/sessions/x/state\n+*** Update File: %s/sessions/x/state\n*** End Patch' "$PP_STATE_DIR" "$PP_STATE_DIR")" | bash "$guard")"; GRC=$?; check "apply_patch elsewhere whose CONTENT names the state dir, even as a header-shaped line → silent (headers, not content)" 'is_silent'
+OUT="$(ap "$(printf '*** Begin Patch\n*** Add File: probe.txt\n+hi\n*** End Patch')" | bash "$guard")"; GRC=$?; check "apply_patch elsewhere → silent" 'is_silent'
+OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x","content":"*** Update File: %s/sessions/%s/state"}}' "$PP_STATE_DIR" "$S" | bash "$guard")"; GRC=$?; check "Write elsewhere whose content carries a patch header → silent (headers count for apply_patch only)" 'is_silent'
+OUT="$(env -u CLAUDE_ENV_FILE CLAUDE_PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh")"; GRC=$?; check "session-env without an env file → SessionStart additionalContext naming bin/predict, valid JSON" '[ $GRC -eq 0 ] && valid_json && printf "%s" "$OUT" | grep -q "additionalContext" && printf "%s" "$OUT" | grep -q "$P/bin/predict"'
+OUT="$(env -u CLAUDE_ENV_FILE -u CLAUDE_PLUGIN_ROOT PLUGIN_ROOT="$P" bash "$P/hooks/session-env.sh")"; GRC=$?; check "session-env resolves the plugin root from PLUGIN_ROOT (Codex)" 'valid_json && printf "%s" "$OUT" | grep -q "$P/bin/predict"'
+( unset PP_SESSION; CODEX_SESSION_ID=cx-1 "$predict" status >/dev/null 2>&1 ); check "CLI: CODEX_SESSION_ID alone resolves the session" '[ $? -eq 0 ]'
+( unset PP_SESSION; CLAUDE_CODE_SESSION_ID=dl-1 CODEX_SESSION_ID=cx-1 "$predict" status > "$T/nest.out" 2>&1 ); check "CLI: both ids set → refused as nested harnesses (rc 2)" '[ $? -eq 2 ] && grep -q "nested" "$T/nest.out"'
+( unset PP_SESSION; CLAUDE_CODE_SESSION_ID=dl-1 CODEX_SESSION_ID=cx-1 PP_SESSION=cx-1 "$predict" status >/dev/null 2>&1 ); check "CLI: PP_SESSION wins over both" '[ $? -eq 0 ]'
+( unset PP_SESSION; "$predict" status >/dev/null 2>&1 ); check "CLI: no id at all → rc 2" '[ $? -eq 2 ]'
+PP_SESSION="lp-1" CODEX_SESSION_ID=cx-9 "$predict" off --reason r > "$T/lpo.out" 2>&1; check "loop: off inside a Codex session is refused (the operator's act)" '[ $? -eq 2 ] && grep -q "operator" "$T/lpo.out"'
 
 echo "tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

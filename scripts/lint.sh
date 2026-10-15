@@ -28,6 +28,17 @@ grep -q 'deny_literal "lib/common.sh is missing' $P/hooks/predict-gate.sh || err
 grep -q 'hook-seen' $P/hooks/predict-gate.sh || err "gate lost the liveness stamp"
 grep -q 'pp_delegated "$permission_mode" "$transcript_path"' $P/hooks/predict-gate.sh && [ "$(grep -c '\[ "$delegated" = 0 \] || pass' $P/hooks/predict-gate.sh)" -eq 2 ] || err "gate lost the delegated-session rule (auto mode must not ask; both ask sites)"
 grep -q 'auto|dontAsk|bypassPermissions' $P/lib/common.sh && grep -q '"permissionMode":"' $P/lib/common.sh || err "pp_delegated lost a mode or the transcript marker"
+# the second harness: Codex has no hook ask — deny where Claude Code asks, silent pass with a receipt, apply_patch guarded, context instead of env file
+grep -q '^pp_harness()' $P/lib/common.sh && grep -q 'harness="$(pp_harness "$codex_marker")"' $P/hooks/predict-gate.sh || err "gate lost the harness decision"
+grep -q 'PP_ENV_PLUGIN_ROOT="${PLUGIN_ROOT:-}"' $P/hooks/predict-gate.sh || err "gate must capture the environment's PLUGIN_ROOT before reusing the name"
+grep -q 'd.get("turn_id") or d.get("model")' $P/hooks/predict-gate.sh && grep -q '.turn_id//""' $P/hooks/predict-gate.sh || err "gate lost the Codex stdin markers in a parser"
+grep -q 'cannot ask' $P/hooks/predict-gate.sh || err "gate lost the Codex deny-instead-of-ask"
+[ "$(grep -c '\[ "$harness" = claude \] || pass' $P/hooks/predict-gate.sh)" -eq 1 ] || err "gate lost the Codex silent-pass-with-receipt rule (exactly one site)"
+grep -q 'pp_mode "$agent_id" "$harness"' $P/hooks/predict-gate.sh && grep -q 'pp_delegated "$permission_mode" "$transcript_path" "$harness"' $P/hooks/predict-gate.sh || err "gate lost the harness argument on mode/delegated"
+grep -q 'Add File|Update File|Delete File|Move to' $P/hooks/predict-state-guard.sh && grep -q '"tool_name":"apply_patch"' $P/hooks/predict-state-guard.sh || err "state guard lost the apply_patch headers"
+grep -q 'Add File|Update File|Delete File|Move to' $P/lib/classify.sh || err "classifier lost the apply_patch header rule"
+grep -q 'additionalContext' $P/hooks/session-env.sh && grep -q 'CLAUDE_ENV_FILE' $P/hooks/session-env.sh || err "session-env lost a delivery path (env file / context)"
+grep -q 'pp_session_from_env' $P/bin/predict && grep -q 'pp_in_model_session' $P/bin/predict && grep -q 'CODEX_SESSION_ID' $P/lib/common.sh || err "CLI lost the two-harness session resolution"
 grep -q 'for i in 1 2 3 4 5 6 7 8 11 12 14 15' $P/lib/common.sh || err "pp_json_str lost the control-byte escaping"
 grep -q 'gtimeout' $P/lib/common.sh || err "pp_with_deadline lost its fallback chain"
 grep -q 'export LC_ALL=C' $P/lib/common.sh && grep -q 'export LC_ALL=C' $P/lib/classify.sh || err "LC_ALL=C missing"
@@ -56,18 +67,21 @@ grep -q 'bin/predict|predict)\[\[:space:\]\]+(on|off|open' $P/lib/classify.sh ||
 [ -s $P/tests/corpus/multiline-deny.txt ] && [ -s $P/tests/corpus/multiline-pass.txt ] || err "multi-line corpora missing"
 # SKILL contract: thin, names the commands, the halt rule, the scope rule, platform limits
 S=$P/skills/prediction-protocol/SKILL.md
-for ph in '"$P" on' '"$P" open' '"$P" close' '"$P" ack' '"$P" report' '"$P" off' 'MISS' 'INCONCLUSIVE' '`Bash` tool only' 'Wrapping is a bypass' 'never write `actual`' 'advisory' 'PREDICT' 'gate: seen' 'PP_SESSION' '--where' '| auto mode'; do grep -qF -- "$ph" "$S" || err "SKILL.md lost: $ph"; done
+for ph in '"$P" on' '"$P" open' '"$P" close' '"$P" ack' '"$P" report' '"$P" off' 'MISS' 'INCONCLUSIVE' '`Bash` tool only' 'Wrapping is a bypass' 'never write `actual`' 'advisory' 'PREDICT' 'gate: seen' 'PP_SESSION' '--where' '| auto mode' '| Codex' 'CODEX_SESSION_ID' '$prediction-protocol:prediction-protocol' '/hooks' 'apply_patch'; do grep -qF -- "$ph" "$S" || err "SKILL.md lost: $ph"; done
 w=$(wc -w < "$S"); [ "$w" -le 1400 ] || err "SKILL.md weight $w words > 1400"
 d=$(sed -n '/^description:/p' "$S" | wc -w); [ "$d" -le 90 ] || err "SKILL.md description is $d words (> 90) — it is loaded in every session"
 J=$P/skills/prediction-protocol/references/journal.md
 for ph in 'contract=1' 'exit=N' 'stdout==' 'stdout~=' 'stdout-in=' 'lines=N' 'http=NNN' 'count=N' 'REFUTED.md' 'predictions:' 'insufficient' 'redaction:' 'gated:' 'ungated' 'gate: seen' '--session-id' 'state-tamper'; do grep -qF -- "$ph" "$J" || err "journal.md lost: $ph"; done
 H=$P/skills/prediction-protocol/references/hook-engineering.md
-for ph in 'exit 1' 'timeout' 'agent_id' 'CLAUDE_CODE_ENTRYPOINT' 'LC_ALL=C' 'PowerShell' 'allow' 'synthetic stdin' 'control byte' 'watchdog' 'hook-seen' 'CLAUDE_ENV_FILE' 'permission_mode' 'transcript_path' 'permission-mode'; do grep -qF -- "$ph" "$H" || err "hook-engineering.md lost: $ph"; done
+for ph in 'exit 1' 'timeout' 'agent_id' 'CLAUDE_CODE_ENTRYPOINT' 'LC_ALL=C' 'PowerShell' 'allow' 'synthetic stdin' 'control byte' 'watchdog' 'hook-seen' 'CLAUDE_ENV_FILE' 'permission_mode' 'transcript_path' 'permission-mode' 'turn_id' 'trusted_hash' 'apply_patch' 'PLUGIN_ROOT' 'CODEX_SESSION_ID' '--dangerously-bypass-hook-trust' 'bypassPermissions'; do grep -qF -- "$ph" "$H" || err "hook-engineering.md lost: $ph"; done
 # house hygiene
 grep -rnE '/home/[a-z]+/' $P README.md README.ru.md CHANGELOG.md CLAUDE.md scripts .github 2>/dev/null | grep -v 'tests/corpus' >/dev/null && err "personal absolute path in a tracked file"
 grep -q 'claude plugin validate plugins/prediction-protocol' README.md && grep -q 'claude plugin validate plugins/prediction-protocol' README.ru.md && grep -q 'claude plugin validate plugins/prediction-protocol' CLAUDE.md || err "docs lost the correct validate command"
 grep -q 'permissions:' .github/workflows/check.yml || err "check.yml has no permissions block"
 grep -q '^| auto' README.md && grep -q '^| auto' README.ru.md || err "README pair lost the auto-mode row"
+grep -q '^| Codex' README.md && grep -q '^| Codex' README.ru.md || err "README pair lost the Codex row"
+grep -q 'codex plugin add prediction-protocol@devpowers' README.md && grep -q 'codex plugin add prediction-protocol@devpowers' README.ru.md || err "README pair lost the Codex install"
+grep -q 'platform-probe.sh --codex' README.md && grep -q 'platform-probe.sh --codex' README.ru.md && grep -q -- '--codex' $P/tests/platform-probe.sh || err "the Codex probe is missing or undocumented"
 # README pair parity (headings)
 diff <(grep -E '^#{1,3} ' README.md | sed -E 's/[^#]//g') <(grep -E '^#{1,3} ' README.ru.md | sed -E 's/[^#]//g') >/dev/null || err "README.md / README.ru.md heading structure differs"
 [ "$fail" = 0 ] && echo "lint: OK" || exit 1

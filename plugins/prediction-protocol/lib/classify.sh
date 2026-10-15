@@ -508,6 +508,9 @@ pp_classify() {
   local cmd="$1" depth="${2:-0}" split seg cls n=0
   [ -n "$cmd" ] || return 1
   [ "$depth" -gt 0 ] || pp_prefilter "$cmd" || return 1
+  # a patch fed to `apply_patch` through the shell (Codex's editor as a command) names its targets in
+  # `*** … File:` headers inside the heredoc body that is dropped below — a header on the protocol state is state-tamper
+  if [[ "$cmd" == *apply_patch* ]] && printf '%s\n' "$cmd" | grep -Eq '^\*\*\* (Add File|Update File|Delete File|Move to): .*prediction-protocol/sessions/'; then printf 'state-tamper\tapply_patch header on the protocol state\n'; return 0; fi
   cmd="$(printf '%s\n' "$cmd" | tr -d '\r' | _pp_drop_heredocs | sed -E 's/(^|[[:space:]])#[^\x27"]*$//')" || return 2
   cmd="$(_pp_lift_substitutions "$cmd")"
   split="$(_pp_split "$cmd")" || return 2

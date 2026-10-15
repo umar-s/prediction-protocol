@@ -3,7 +3,7 @@
 [![release](https://img.shields.io/github/v/release/umar-s/prediction-protocol?display_name=tag&sort=semver)](https://github.com/umar-s/prediction-protocol/releases)
 [![check](https://github.com/umar-s/prediction-protocol/actions/workflows/check.yml/badge.svg)](https://github.com/umar-s/prediction-protocol/actions/workflows/check.yml)
 
-Прогноз до действия — плагин для Claude Code. Хук `PreToolUse` отказывает
+Прогноз до действия — плагин для Claude Code и Codex CLI. Хук `PreToolUse` отказывает
 необратимым shell-командам — миграции, force-push, merge, deploy, рестарт,
 удалённое исполнение, мутирующий HTTP, права и секреты, рекурсивное
 удаление, — пока у сессии нет **receipt** на эту точную команду: гипотеза,
@@ -36,15 +36,19 @@ stderr с exit 2, чтобы дефект одного канала никогд
 а не проза. В headless-прогоне и в делегированной сессии (auto-режим,
 `dontAsk`, `bypassPermissions`) гейт молчит вне протокола и отказывает
 внутри — `ask` хука останавливает человека даже в auto-режиме, а человек
-вместо себя выбрал классификатор.
+вместо себя выбрал классификатор. У Codex хукового `ask` нет вовсе (хук,
+который спрашивает, помечается failed, и команда выполняется), поэтому там
+гейт **отказывает** вместо вопроса, а совпавший receipt пропускает молча —
+receipt и есть свидетель, собственные подтверждения Codex остаются в силе.
 Субагенты необратимых дверей не открывают: им велено отчитаться о команде как
 о находке.
 
 | | вне протокола | под протоколом, без receipt | receipt совпал |
 |---|---|---|---|
-| интерактив | ask | deny + рецепт | ask, прогноз в промпте |
-| auto-режим / `dontAsk` / `bypassPermissions` | молчит | deny + рецепт | молчит |
-| субагент | ask | deny: отчитаться как о находке | deny |
+| интерактив, Claude Code | ask | deny + рецепт | ask, прогноз в промпте |
+| Codex, интерактив | deny (спросить нельзя) | deny + рецепт | молча пропускает |
+| auto-режим / `dontAsk` / `bypassPermissions` / `codex exec` | молчит | deny + рецепт | молчит |
+| субагент | ask (на Codex deny) | deny: отчитаться как о находке | deny |
 | headless (`claude -p`) | молчит | deny + рецепт | молчит |
 
 **MISS** (подтверждённый вторым измерением, оба записаны) останавливает все
@@ -85,8 +89,8 @@ flyway, liquibase, manage.py, goose, …); SQL/KV-клиенты с запись
 ## Fail-closed — структурно
 
 Платформа fail-open: хук, который вышел с кодом 1, напечатал битый JSON или
-превысил таймаут, пропускает команду (проверено на Claude Code 2.1.239,
-`tests/platform-probe.sh`). Поэтому у гейта есть внешняя обёртка, которой для
+превысил таймаут, пропускает команду (проверено на Claude Code 2.1.239 и
+Codex CLI 0.162.1, `tests/platform-probe.sh [--codex]`). Поэтому у гейта есть внешняя обёртка, которой для
 deny нужен только bash, префильтр словаря на чистом bash, `ERR`-trap,
 отвечающий deny, внутренний дедлайн короче таймаута из `hooks.json` (GNU
 `timeout`, `gtimeout` или bash-watchdog), экранирование каждого control-байта
@@ -94,10 +98,10 @@ deny нужен только bash, префильтр словаря на чис
 живёт вне репозитория в
 `~/.local/state/prediction-protocol/sessions/<session_id>/`, по id сессии,
 который платформа передаёт хуку (или по `PP_SESSION`, который runner
-экспортирует вокруг `claude -p --session-id`) — без `TASK-ID`, без
-зависимости от `cwd`, нечему случайно попасть в коммит, и модели нечего там
-править: Edit/Write в этот каталог отказывает второй хук, записи через Bash
-классифицируются.
+экспортирует вокруг `claude -p --session-id` / `codex exec`) — без
+`TASK-ID`, без зависимости от `cwd`, нечему случайно попасть в коммит, и
+модели нечего там править: Edit/Write в этот каталог (в Codex `apply_patch`)
+отказывает второй хук, записи через Bash классифицируются.
 
 ## Структура
 
@@ -108,8 +112,8 @@ plugins/prediction-protocol/
   skills/prediction-protocol/references/hook-engineering.md # факты платформы + чеклист для любого хука линейки
   hooks/hooks.json · hooks/predict-gate.sh   # гейт (matcher "Bash", timeout 15)
   hooks/predict-fired.sh                     # PostToolUse: помечает потреблённый receipt исполненным
-  hooks/predict-state-guard.sh               # PreToolUse на Edit/Write: каталог состояния не редактируется
-  hooks/session-env.sh                       # SessionStart: экспортирует PREDICT=<plugin>/bin/predict потребителям
+  hooks/predict-state-guard.sh               # PreToolUse на Edit/Write (apply_patch в Codex): каталог состояния не редактируется
+  hooks/session-env.sh                       # SessionStart: PREDICT=<plugin>/bin/predict — env-файл в Claude Code, контекст сессии в Codex
   bin/predict                                # on | off | status | open | close | ack | retry | withdraw | report | lint | classify | selftest
   lib/classify.sh · lib/common.sh            # классификатор; состояние, утверждения, редакция
   tests/run.sh · tests/classify-corpus.sh · tests/platform-probe.sh · tests/corpus/
@@ -118,15 +122,21 @@ plugins/prediction-protocol/
 ## Установка
 
 ```
-/plugin marketplace add umar-s/devpowers
+/plugin marketplace add umar-s/devpowers            # Claude Code
 /plugin install prediction-protocol@devpowers
+
+codex plugin marketplace add umar-s/devpowers       # Codex CLI — затем /hooks → Trust, и снова после каждого обновления
+codex plugin add prediction-protocol@devpowers
 ```
 
-Linux, только инструмент `Bash`; `python3` или `jq` для разбора stdin хука
-(нет ни того ни другого → необратимый вызов получает deny, никогда не
-молчание); предпочтительно GNU `timeout` или `gtimeout`, иначе bash-watchdog.
-macOS в 1.0 не тестировался (сьют идёт только на Linux CI). MCP-инструменты
-и PowerShell вне 1.x — по объявлению.
+Linux, только инструмент `Bash` (в Codex — shell-инструмент, который платформа
+называет хукам `Bash`); `python3` или `jq` для разбора stdin хука (нет ни того
+ни другого → необратимый вызов получает deny, никогда не молчание);
+предпочтительно GNU `timeout` или `gtimeout`, иначе bash-watchdog. macOS не
+тестировался (сьют идёт только на Linux CI). MCP-инструменты и PowerShell вне
+1.x — по объявлению. В Codex хуки плагина работают только после доверия в
+`/hooks`, и доверие — по хэшу: после каждого обновления плагина снова;
+раннер вместо этого передаёт `--dangerously-bypass-hook-trust`.
 
 ## Потребители
 
@@ -137,12 +147,13 @@ macOS в 1.0 не тестировался (сьют идёт только на 
   evidence-блоке, чтение `REFUTED.md` в фазе 0. Работает без плагина:
   строки печатают `predict-gate: absent`.
 - **loop-foundry** — runner экспортирует один `PP_SESSION=<uuid>`, выполняет
-  `predict on <loop> --loop`, затем `claude -p --session-id <uuid>`; `predict
+  `predict on <loop> --loop`, затем `claude -p --session-id <uuid>` или
+  `codex exec`; `predict
   report --json` снимается до и после executor'а, оба снимка попадают в
   запись тика (журнал лупа накопительный, тик — разность) как второй сигнал
   на лестнице shadow → gated → autonomous. Halt — стоп, исполняемый хуком, а
   под `--loop` `ack`, `withdraw` и `off` отказываются работать внутри
-  Claude-сессии — это действия оператора.
+  сессии модели — это действия оператора.
 
 ## Проверки
 
@@ -151,6 +162,7 @@ bash scripts/lint.sh                                   # писаные прав
 bash plugins/prediction-protocol/tests/classify-corpus.sh   # контракт классификатора (одно- и многострочные корпуса)
 bash plugins/prediction-protocol/tests/run.sh          # негативные контроли: таблица решений, жизненный цикл receipt, halt, редакция, lint, пути ошибок, корпуса через гейт
 bash plugins/prediction-protocol/tests/platform-probe.sh   # через сам Claude Code; вручную, при релизе
+bash plugins/prediction-protocol/tests/platform-probe.sh --codex   # через Codex CLI (изолированный CODEX_HOME, read-only песочница); вручную, при релизе
 claude plugin validate plugins/prediction-protocol
 ```
 

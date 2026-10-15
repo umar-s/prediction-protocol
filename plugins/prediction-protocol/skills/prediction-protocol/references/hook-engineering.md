@@ -2,8 +2,9 @@
 
 Verified on Claude Code 2.1.239 (2026-08-22) with a project-level
 PreToolUse hook on `Bash` through `claude -p`, both with `--allowedTools
-Bash` and with `--dangerously-skip-permissions`. Re-run
-`tests/platform-probe.sh` at every release to see whether a row moved.
+Bash` and with `--dangerously-skip-permissions`; re-verified unchanged on
+2.1.300 (2026-10-15). Re-run `tests/platform-probe.sh` at every release to
+see whether a row moved; the Codex table is further down.
 
 | hook output | effect |
 |---|---|
@@ -90,3 +91,71 @@ and leaves every deny in place. No mode flag is exchanged between plugins.
 - `SessionStart` may append `export …` lines to `$CLAUDE_ENV_FILE`; they
   become the preamble of every later Bash call. That is how `PREDICT`
   reaches consumers (`hooks/session-env.sh`) — side-effect only, exit 0 always.
+- On Codex an `ask` is a fail-open: never emit it there. The gate decides the
+  harness per call (`pp_harness`: `turn_id`/`model` on stdin, `PLUGIN_ROOT`
+  in the environment, `PP_HARNESS` as the override) and denies instead; a
+  matching receipt passes silently. A file-edit guard matches `Edit|Write`
+  on both platforms; on Codex the paths are the patch headers in
+  `tool_input.command`, never the content.
+
+## Codex CLI 0.162.1 (verified 2026-10-15, `tests/platform-probe.sh --codex`)
+
+Same files, same JSON contract — the plugin's `hooks/hooks.json` is read as
+is and matchers see the tool name and its aliases — different platform facts:
+
+| hook output | effect |
+|---|---|
+| exit 0 + deny JSON | blocked; the reason reaches the model as "Command blocked by PreToolUse hook: …" |
+| exit 0 + `permissionDecision: ask` | **not supported**: the run is marked Failed and **the command runs** |
+| exit 2 + stderr | blocked; stderr is the reason |
+| exit 1 · invalid JSON · exit 2 without stderr | Failed, **the command runs** |
+| exit 0 + `hookSpecificOutput.additionalContext` (PreToolUse, SessionStart) | added to the model's context; plain stdout on SessionStart too |
+| the hook overruns its `timeout` | Failed, **the command runs** (default 600 s when unset) |
+
+**Stdin.** Common: `session_id`, `transcript_path` (the rollout `.jsonl`, may
+be `null`), `cwd`, `hook_event_name`, `model`, `permission_mode`. PreToolUse
+adds `turn_id` — a Codex extension and the gate's harness marker, Claude Code
+never sends it — `tool_name`, `tool_use_id`, `tool_input`; `agent_id` and
+`agent_type` arrive for spawned subagents. `permission_mode` is derived from
+the approval policy: `never` → `bypassPermissions`, everything else →
+`default`. `codex exec` always runs with approval `never` — a
+`-c approval_policy=on-request` override still prints `approval: never` and
+arrives as `bypassPermissions` (observed) — so every exec session is a
+delegated session (silent outside the protocol, deny without a receipt,
+silent with one); `default` arrives only from the TUI and the app, where the
+gate's deny-instead-of-ask applies. The probe replays the platform's own
+stdin with `permission_mode: default` through the gate for that row. Tool names:
+the shell tool is `Bash` (`exec_command` too); a file edit is `apply_patch`
+with `tool_input.command` = the patch text, selected by matchers
+`apply_patch`, `Edit` or `Write`; MCP tools are `mcp__<server>__<tool>`;
+`spawn_agent` also matches `Agent`.
+
+**Environment of a plugin hook.** `PLUGIN_ROOT`, `PLUGIN_DATA`, and
+`CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA` for compatibility; no
+`CLAUDE_ENV_FILE`, no entrypoint, no session id. Everything else is inherited
+from the process that started `codex`: a Codex started from a Claude Code
+shell carries `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID` and the rest
+into its hooks and into the model's shell — which is why the harness is
+decided from stdin and `PLUGIN_ROOT`, never from a `CLAUDE_*` name, and why
+`pp_entrypoint` ignores `CLAUDE_CODE_ENTRYPOINT` on Codex. The model's shell
+gets `CODEX_SESSION_ID` (equal to the hook's `session_id`), `CODEX_THREAD_ID`
+and, inside the sandbox, `CODEX_SANDBOX_NETWORK_DISABLED=1`; nothing adds the
+plugin's `bin/` to PATH — hence the context line from `session-env.sh`. The
+sandbox is its own pid namespace (PID 1 is `codex`), so a shell cannot find
+its session by process ancestry.
+
+**Trust.** A non-managed hook runs only after `/hooks` → Trust. The record is
+`[hooks.state."<plugin>@<marketplace>:hooks/hooks.json:<event>:<group>:<handler>"]
+trusted_hash = "sha256:…"` in `~/.codex/config.toml` (user hooks are keyed
+by the absolute path of their `hooks.json`), and the hash covers the
+normalised identity, not the file: `{event_name: "pre_tool_use", matcher,
+hooks: [{type, command as written (placeholders unexpanded), timeout
+(default 600), async, statusMessage}]}` serialised as TOML, then JSON with
+sorted keys, then SHA-256. A changed command, matcher or timeout is a new
+hash: after every plugin update the hooks are silently skipped until trusted
+again, which `predict report` shows as `gate: never`. Automation that
+installed the plugin itself passes `--dangerously-bypass-hook-trust`; the
+probe writes the records for its own lab home with the same algorithm.
+
+Not observed on Codex: macOS; a Windows `commandWindows` handler.
+

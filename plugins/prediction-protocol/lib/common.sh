@@ -3,7 +3,7 @@
 # Session state lives OUTSIDE the repository, keyed by the Claude Code session
 # id, and is written only by bin/predict (plus the hook's `consumed` mark).
 export LC_ALL=C
-PP_VERSION="1.0.3"                      # lint: must equal .claude-plugin/plugin.json
+PP_VERSION="1.1.0"                      # lint: must equal .claude-plugin/plugin.json
 PP_CONTRACT=1                           # journal header contract number
 PP_TTL="${PP_TTL:-1800}"                # receipt lifetime, seconds
 PP_K="${PP_K:-20}"                      # report: below this n the rate is "insufficient"
@@ -56,29 +56,63 @@ pp_kv_set() {   # file key value
   tmp="$f.tmp.$$"; { [ -r "$f" ] && grep -v "^$k=" "$f"; printf '%s=%s\n' "$k" "$v"; } > "$tmp" && mv -f "$tmp" "$f"
 }
 pp_kv_del() { local f="$1" k="$2" tmp="$1.tmp.$$"; [ -r "$f" ] || return 0; grep -v "^$k=" "$f" > "$tmp"; mv -f "$tmp" "$f"; }
+# harness: which platform runs this hook. Decided from what each platform
+# alone provides (verified Codex CLI 0.162.1 and Claude Code 2.1.283,
+# 2026-10-15): Codex serialises `turn_id` and `model` into every PreToolUse
+# stdin and sets PLUGIN_ROOT for plugin hooks; Claude Code does neither.
+# Environment names such as CLAUDE_CODE_ENTRYPOINT are NOT a signal — a Codex
+# started from a Claude shell inherits them. PP_HARNESS is the operator's
+# override. Unknown → claude, the platform whose `ask` is known to work.
+pp_harness() {   # $1 = 1 when stdin carried a Codex marker; prints claude|codex
+  case "${PP_HARNESS:-}" in claude|codex) printf '%s' "$PP_HARNESS"; return ;; esac
+  # PP_ENV_PLUGIN_ROOT is the environment's PLUGIN_ROOT, captured by the hook before it reuses that name for its own root
+  if [ "${1:-}" = 1 ] || [ -n "${PP_ENV_PLUGIN_ROOT:-}" ]; then printf 'codex'; else printf 'claude'; fi
+}
+# the entrypoint the mode derives from: PP_ENTRYPOINT (a runner's word) on both
+# platforms; CLAUDE_CODE_ENTRYPOINT only on Claude Code — on Codex it is a leak
+pp_entrypoint() {   # $1 = harness
+  if [ -n "${PP_ENTRYPOINT:-}" ]; then printf '%s' "$PP_ENTRYPOINT"
+  elif [ "${1:-claude}" = claude ]; then printf '%s' "${CLAUDE_CODE_ENTRYPOINT:-cli}"
+  else printf 'cli'; fi
+}
 # execution context, decided from what the platform actually provides (verified
-# on Claude Code 2.1.239): agent_id on stdin → subagent; CLAUDE_CODE_ENTRYPOINT
-# "cli" → interactive; "sdk-cli" (claude -p) → headless. Unknown → interactive
-# (the safer failure: a prompt the human sees, not a silent pass).
-pp_mode() {   # $1 = agent_id (may be empty)
+# on Claude Code 2.1.239): agent_id on stdin → subagent (Codex sends it for
+# spawned subagents too); entrypoint "cli" → interactive; "sdk-cli" (claude -p)
+# or "headless" → headless. Unknown → interactive (the safer failure: a prompt
+# the human sees — or, on Codex, a deny — not a silent pass).
+pp_mode() {   # $1 = agent_id (may be empty), $2 = harness
   if [ -n "$1" ]; then printf 'subagent'; return; fi
-  local e="${PP_ENTRYPOINT:-${CLAUDE_CODE_ENTRYPOINT:-cli}}"
+  local e; e="$(pp_entrypoint "${2:-claude}")"
   case "$e" in sdk*|headless*) printf 'headless' ;; *) printf 'interactive' ;; esac
 }
 # A delegated session is one where the human chose not to be asked: auto mode
 # (a classifier answers), dontAsk, bypassPermissions. Two sources, either
 # suffices: the stdin field `permission_mode` (auto arrives as `default` there,
-# verified 2.1.240) and the platform's own record — the last
-# `"permissionMode":"…"` marker in the session transcript, whose path arrives
-# on stdin. Unreadable or absent → 0: the failure is a visible prompt.
-pp_delegated() {   # $1 = permission_mode from stdin, $2 = transcript_path; prints 0|1
+# verified 2.1.240; Codex maps approval_policy=never to bypassPermissions and
+# everything else to default) and, on Claude Code only, the platform's own
+# record — the last `"permissionMode":"…"` marker in the session transcript,
+# whose path arrives on stdin (a Codex rollout carries no such marker; text in
+# it is content, not state). Unreadable or absent → 0: the failure is a prompt.
+pp_delegated() {   # $1 = permission_mode from stdin, $2 = transcript_path, $3 = harness; prints 0|1
   local m="$1"
-  if [ -n "${2:-}" ] && [ -r "$2" ]; then
+  if [ "${3:-claude}" = claude ] && [ -n "${2:-}" ] && [ -r "$2" ]; then
     local t; t="$(tail -c 262144 "$2" 2>/dev/null | grep -o '"permissionMode":"[A-Za-z]*"' | tail -1 | sed 's/.*:"//; s/"$//')" || t=""
     [ -n "$t" ] && m="$t"
   fi
   case "$m" in auto|dontAsk|bypassPermissions) printf '1' ;; *) printf '0' ;; esac
 }
+# The session a shell command belongs to, for the CLI: a runner's PP_SESSION,
+# else the id the platform exports to the model's shell — CLAUDE_CODE_SESSION_ID
+# (Claude Code) or CODEX_SESSION_ID (Codex; equal to the hook's session_id,
+# verified 0.162.1). Both present = one harness started inside the other's
+# shell; the caller must name the gate it is under. rc 0 ok · 1 none · 3 ambiguous
+pp_session_from_env() {
+  if [ -n "${PP_SESSION:-}" ]; then printf '%s' "$PP_SESSION"; return 0; fi
+  local c="${CLAUDE_CODE_SESSION_ID:-}" x="${CODEX_SESSION_ID:-}"
+  if [ -n "$c" ] && [ -n "$x" ]; then return 3; fi
+  if [ -n "$c" ]; then printf '%s' "$c"; elif [ -n "$x" ]; then printf '%s' "$x"; else return 1; fi
+}
+pp_in_model_session() { [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || [ -n "${CODEX_SESSION_ID:-}" ]; }
 # built-in redaction — always applied to `actual`; gitleaks (ci/scan-text.sh) on top when present
 pp_redact() {
   sed -E \

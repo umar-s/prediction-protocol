@@ -14,8 +14,15 @@
 # any unhandled error into a deny, and denies that block by BOTH channels —
 # deny JSON on stdout and the reason on stderr with exit 2 — so a defect in one
 # channel can never become an allow. The word allow never appears here.
+#
+# Two harnesses, one table: Codex CLI runs the same hook with the same JSON
+# contract but has no PreToolUse `ask` (a hook that asks is marked failed and
+# the command RUNS — verified 0.162.1), so where this gate would ask on Claude
+# Code it denies on Codex, and with a matching receipt it passes silently —
+# the receipt is the witness, as in a delegated session.
 set -u -o pipefail
 export LC_ALL=C
+PP_ENV_PLUGIN_ROOT="${PLUGIN_ROOT:-}"   # Codex sets PLUGIN_ROOT for plugin hooks, Claude Code does not — read it before the name is reused below
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$here/.." && pwd)}"
 PP_VERSION=unknown
@@ -54,7 +61,10 @@ fi
 predict="\"$PLUGIN_ROOT/bin/predict\""
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":%s}}\n' "$1" "$(pp_json_str "$2")"; }
 deny() { emit deny "prediction-protocol v$PP_VERSION: $1"; printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2; exit 2; }
-ask()  { emit ask  "prediction-protocol v$PP_VERSION: $1"; exit 0; }
+ask()  {   # Claude Code: the permission prompt carries the reason. Codex: no hook ask exists — deny, and say why
+  [ "${harness:-claude}" = claude ] || deny "$1 — this harness cannot ask: Codex has no PreToolUse ask (a hook that asks is marked failed and the command runs), so the gate denies instead. Either run the command yourself from a plain shell, or put the session under the protocol and open a receipt for it — then the receipt is the witness and the gate passes it silently."
+  emit ask "prediction-protocol v$PP_VERSION: $1"; exit 0
+}
 pass() { exit 0; }
 
 ONEWAY=""; CLS=""
@@ -80,8 +90,9 @@ print(d.get("tool_use_id") or "")
 print(d.get("permission_mode") or "")
 print(d.get("transcript_path") or "")
 print(base64.b64encode(cmd.encode()).decode())
+print("1" if (d.get("turn_id") or d.get("model")) else "")
 '; }
-parse_jq() { jq -r '[(.session_id//""), (.agent_id//""), (.tool_name//""), (.tool_use_id//""), (.permission_mode//""), (.transcript_path//""), ((.tool_input.command//"")|@base64)] | .[]'; }
+parse_jq() { jq -r '[(.session_id//""), (.agent_id//""), (.tool_name//""), (.tool_use_id//""), (.permission_mode//""), (.transcript_path//""), ((.tool_input.command//"")|@base64), (if ((.turn_id//"")!="" or (.model//"")!="") then "1" else "" end)] | .[]'; }
 fields=""
 command -v python3 >/dev/null 2>&1 && fields="$(printf '%s' "$input" | parse_py 2>/dev/null)" || fields=""
 [ -n "$fields" ] || { command -v jq >/dev/null 2>&1 && fields="$(printf '%s' "$input" | parse_jq 2>/dev/null)" || fields=""; }
@@ -93,6 +104,8 @@ tool_use_id="$(printf '%s\n' "$fields" | sed -n 4p)"
 permission_mode="$(printf '%s\n' "$fields" | sed -n 5p)"
 transcript_path="$(printf '%s\n' "$fields" | sed -n 6p)"
 command="$(printf '%s\n' "$fields" | sed -n 7p | base64 -d 2>/dev/null)" || command=""
+codex_marker="$(printf '%s\n' "$fields" | sed -n 8p)"   # turn_id / model: Codex serialises them, Claude Code does not
+harness="$(pp_harness "$codex_marker")"
 [ "$tool_name" = "Bash" ] || pass
 [ -n "$command" ] || pass
 
@@ -114,8 +127,8 @@ fi
 [ -n "${PP_TEST_SLEEP:-}" ] && sleep "$PP_TEST_SLEEP"
 [ "$state_broken" = 0 ] || deny "\`$CLS\` is a one-way action and this session's protocol state exists but cannot be read ($sdir/state) — failing closed. Fix the permissions or run $predict on again."
 
-mode="$(pp_mode "$agent_id")"
-delegated="$(pp_delegated "$permission_mode" "$transcript_path")"   # 1 = auto / dontAsk / bypassPermissions: the human chose a classifier or no prompts; an ask would stop on nobody
+mode="$(pp_mode "$agent_id" "$harness")"
+delegated="$(pp_delegated "$permission_mode" "$transcript_path" "$harness")"   # 1 = auto / dontAsk / bypassPermissions (Codex: approval never): the human chose a classifier or no prompts; an ask would stop on nobody
 cmd_norm="$(pp_norm "$command")"
 q="$(printf '%s' "$command" | sed "s/'/'\\\\''/g")"
 
@@ -123,7 +136,7 @@ q="$(printf '%s' "$command" | sed "s/'/'\\\\''/g")"
 if [ "$active" != 1 ]; then
   case "$mode" in
     headless) pass ;;                                 # the runner's permissions decide; a subagent in -p has nobody to ask either
-    *) [ "${PP_ENTRYPOINT:-${CLAUDE_CODE_ENTRYPOINT:-cli}}" = cli ] || pass
+    *) [ "$(pp_entrypoint "$harness")" = cli ] || pass
        [ "$delegated" = 0 ] || pass                    # delegated session: the platform decides, as the runner's permissions do in headless
        ask "\`$CLS\` is a one-way action and this session is not under the prediction protocol. Approve to run it as-is, or put the session under the protocol first: $predict on <journal-name> — then every one-way action needs a receipt ($predict open …)." ;;
   esac
@@ -184,5 +197,6 @@ hyp="$(cat "$sdir/receipts/$match/hypothesis")"; obs="$(cat "$sdir/receipts/$mat
 case "$mode" in
   headless) pass ;;
   *) [ "$delegated" = 0 ] || pass                      # delegated session: the receipt is the witness, there is no one to show it to
+     [ "$harness" = claude ] || pass                    # Codex: no hook ask exists — the receipt is the witness; the platform's own approval flow still runs
      ask "predict $match — hypothesis: $hyp · observe: \`$obs\` → expect $exp (falsifier: $(pp_falsifier "$exp")). Approve to fire \`$cmd_norm\`; afterwards: $predict close $match. If you decline: $predict withdraw $match --reason 'not fired'." ;;
 esac

@@ -3,7 +3,7 @@
 [![release](https://img.shields.io/github/v/release/umar-s/prediction-protocol?display_name=tag&sort=semver)](https://github.com/umar-s/prediction-protocol/releases)
 [![check](https://github.com/umar-s/prediction-protocol/actions/workflows/check.yml/badge.svg)](https://github.com/umar-s/prediction-protocol/actions/workflows/check.yml)
 
-Prediction before action, as a Claude Code plugin. A `PreToolUse` gate
+Prediction before action, as a plugin for Claude Code and Codex CLI. A `PreToolUse` gate
 refuses one-way shell commands — migrations, force-push, merge, deploy,
 restart, remote exec, mutating HTTP, grants and secrets, recursive delete —
 unless the session holds a **receipt** for that exact command: a hypothesis,
@@ -37,14 +37,18 @@ command **asks** — the owner's "ask only at the irreversible" as a mechanism
 rather than a prose rule. In headless runs and in a delegated session (auto
 mode, `dontAsk`, `bypassPermissions`) the gate stays silent outside the
 protocol and denies inside it — a hook's `ask` stops on the human even in auto
-mode, and the human chose a classifier instead. Subagents never open one-way doors: they are
-told to report the command as a finding.
+mode, and the human chose a classifier instead. Codex has no hook `ask` at all
+(a hook that asks is marked failed and the command runs), so there the gate
+**denies** where it would ask and passes a matching receipt silently — the
+receipt is the witness, Codex's own approval flow still applies. Subagents
+never open one-way doors: they are told to report the command as a finding.
 
 | | outside the protocol | under it, no receipt | receipt matches |
 |---|---|---|---|
-| interactive | ask | deny + recipe | ask, prediction in the prompt |
-| auto mode / `dontAsk` / `bypassPermissions` | silent | deny + recipe | silent |
-| subagent | ask | deny: report as a finding | deny |
+| interactive, Claude Code | ask | deny + recipe | ask, prediction in the prompt |
+| Codex, interactive | deny (cannot ask) | deny + recipe | silent pass |
+| auto mode / `dontAsk` / `bypassPermissions` / `codex exec` | silent | deny + recipe | silent |
+| subagent | ask (deny on Codex) | deny: report as a finding | deny |
 | headless (`claude -p`) | silent | deny + recipe | silent |
 
 A **MISS** (confirmed by a second measurement, both recorded) halts every
@@ -84,8 +88,8 @@ protocol's own state are. The corpora in `tests/corpus/` are the contract
 ## Fail-closed, structurally
 
 The platform is fail-open: a hook that exits 1, prints broken JSON or
-overruns its timeout lets the command run (verified on Claude Code 2.1.239,
-`tests/platform-probe.sh`). The gate therefore has an outer wrapper that
+overruns its timeout lets the command run (verified on Claude Code 2.1.239
+and Codex CLI 0.162.1, `tests/platform-probe.sh [--codex]`). The gate therefore has an outer wrapper that
 needs nothing but bash to answer deny, a pure-bash vocabulary pre-filter, an
 `ERR` trap that answers deny, an inner deadline shorter than its
 `hooks.json` timeout (GNU `timeout`, `gtimeout`, or a bash watchdog), every
@@ -93,9 +97,10 @@ control byte escaped in its JSON, no network, and never emits `allow`.
 Receipt state lives outside the repository under
 `~/.local/state/prediction-protocol/sessions/<session_id>/`, keyed by the
 session id the platform passes to the hook (or the `PP_SESSION` a runner
-exports around `claude -p --session-id`) — no `TASK-ID`, no `cwd`
-dependence, nothing to commit by accident, and nothing the model may edit:
-Edit/Write into it is denied by a second hook, Bash writes are classified.
+exports around `claude -p --session-id` / `codex exec`) — no `TASK-ID`, no
+`cwd` dependence, nothing to commit by accident, and nothing the model may
+edit: Edit/Write into it (`apply_patch` on Codex) is denied by a second hook,
+Bash writes are classified.
 
 ## Layout
 
@@ -106,8 +111,8 @@ plugins/prediction-protocol/
   skills/prediction-protocol/references/hook-engineering.md # platform facts + checklist for any hook in the line
   hooks/hooks.json · hooks/predict-gate.sh   # the gate (matcher "Bash", timeout 15)
   hooks/predict-fired.sh                     # PostToolUse: marks a consumed receipt as fired
-  hooks/predict-state-guard.sh               # PreToolUse on Edit/Write: the state dir is not editable
-  hooks/session-env.sh                       # SessionStart: exports PREDICT=<plugin>/bin/predict for consumers
+  hooks/predict-state-guard.sh               # PreToolUse on Edit/Write (apply_patch on Codex): the state dir is not editable
+  hooks/session-env.sh                       # SessionStart: PREDICT=<plugin>/bin/predict — env file on Claude Code, session context on Codex
   bin/predict                                # on | off | status | open | close | ack | retry | withdraw | report | lint | classify | selftest
   lib/classify.sh · lib/common.sh            # the classifier; state, claims, redaction
   tests/run.sh · tests/classify-corpus.sh · tests/platform-probe.sh · tests/corpus/
@@ -116,15 +121,21 @@ plugins/prediction-protocol/
 ## Install
 
 ```
-/plugin marketplace add umar-s/devpowers
+/plugin marketplace add umar-s/devpowers            # Claude Code
 /plugin install prediction-protocol@devpowers
+
+codex plugin marketplace add umar-s/devpowers       # Codex CLI — then /hooks → Trust, again after every update
+codex plugin add prediction-protocol@devpowers
 ```
 
-Linux, the `Bash` tool only; `python3` or `jq` for the hook's stdin (neither
-→ a one-way call is denied, never silent); GNU `timeout` or `gtimeout`
-preferred, a bash watchdog otherwise. macOS is untested in 1.0 (the suite
-runs on Linux CI only). MCP tools and PowerShell are outside 1.x by
-declaration.
+Linux, the `Bash` tool only (on Codex the shell tool, which the platform names
+`Bash` to hooks); `python3` or `jq` for the hook's stdin (neither → a one-way
+call is denied, never silent); GNU `timeout` or `gtimeout` preferred, a bash
+watchdog otherwise. macOS is untested (the suite runs on Linux CI only). MCP
+tools and PowerShell are outside 1.x by declaration. On Codex the plugin's
+hooks run only after they are trusted in `/hooks`, and the trust is per
+hash — after every plugin update, again; a runner passes
+`--dangerously-bypass-hook-trust` instead.
 
 ## Consumers
 
@@ -135,12 +146,13 @@ declaration.
   the evidence block, `REFUTED.md` read in phase 0. Works without the plugin:
   the lines print `predict-gate: absent`.
 - **loop-foundry** — the runner exports one `PP_SESSION=<uuid>`, runs
-  `predict on <loop> --loop`, then `claude -p --session-id <uuid>`; `predict
+  `predict on <loop> --loop`, then `claude -p --session-id <uuid>` or
+  `codex exec`; `predict
   report --json` is snapshotted before and after the executor and both land
   in the tick record (the loop journal is cumulative, so the tick is the
   difference), a second signal on the shadow → gated → autonomous ladder. A
   halt is a hook-enforced stop, and under `--loop` `ack`, `withdraw` and
-  `off` refuse to run inside a Claude session — they are the operator's.
+  `off` refuse to run inside a model session — they are the operator's.
 
 ## Checks
 
@@ -149,6 +161,7 @@ bash scripts/lint.sh                                   # written rules as greps:
 bash plugins/prediction-protocol/tests/classify-corpus.sh   # the classifier contract (single-line and multi-line corpora)
 bash plugins/prediction-protocol/tests/run.sh          # negative controls: the decision table, receipt lifecycle, halt, redaction, lint, error paths, the corpora through the gate
 bash plugins/prediction-protocol/tests/platform-probe.sh   # through Claude Code itself; manual, at release
+bash plugins/prediction-protocol/tests/platform-probe.sh --codex   # through Codex CLI (isolated CODEX_HOME, read-only sandbox); manual, at release
 claude plugin validate plugins/prediction-protocol
 ```
 

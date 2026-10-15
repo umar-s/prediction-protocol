@@ -15,3 +15,12 @@ cat > run.sh <<'EOF2'
 echo hi
 EOF2
 git push --force origin main
+---
+apply_patch <<'EOF2'
+*** Begin Patch
+*** Update File: /home/u/.local/state/prediction-protocol/sessions/abc/state
+@@
+-active=1
++active=0
+*** End Patch
+EOF2

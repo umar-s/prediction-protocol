@@ -33,8 +33,11 @@ need_val() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }
 oneline() { [[ "$2" == *$'\n'* || "$2" == *$'\r'* ]] && die "$1 is one line"; return 0; }
 
 session_id() {
-  local s="${PP_SESSION:-${CLAUDE_CODE_SESSION_ID:-}}"
-  [ -n "$s" ] || die "no session id: set CLAUDE_CODE_SESSION_ID (Claude Code exports it to the Bash tool) or PP_SESSION"
+  local s rc; s="$(pp_session_from_env)"; rc=$?
+  case "$rc" in
+    1) die "no session id: the platform exports it to the model's shell (CLAUDE_CODE_SESSION_ID in Claude Code, CODEX_SESSION_ID in Codex) — outside a session set PP_SESSION" ;;
+    3) die "nested harnesses: both CLAUDE_CODE_SESSION_ID and CODEX_SESSION_ID are set — export PP_SESSION with the id of the session whose gate this shell is under (CODEX_SESSION_ID inside Codex, CLAUDE_CODE_SESSION_ID inside Claude Code)" ;;
+  esac
   pp_valid_session "$s" || die "session id '$s' must match [A-Za-z0-9][A-Za-z0-9_.-]*"
   printf '%s' "$s"
 }
@@ -42,7 +45,7 @@ SID=""; SID8=""; SDIR=""; STATE=""
 load_session() { SID="$(session_id)" || exit 2; SID8="$(pp_sid8 "$SID")"; SDIR="$(pp_session_dir "$SID")"; STATE="$SDIR/state"; }
 loop_operator_only() {   # $1 = verb — under `on --loop`, ack / withdraw / off are the operator's acts, never the executor session's
   [ "$(pp_kv_get "$STATE" kind 2>/dev/null || true)" = loop ] || return 0
-  [ -z "${CLAUDE_CODE_SESSION_ID:-}" ] || die "$1 in a loop is the operator's act — run it from a shell outside a Claude session, as the runner user: PP_SESSION=$SID predict $1 …"
+  ! pp_in_model_session || die "$1 in a loop is the operator's act — run it from a shell outside a model session (no CLAUDE_CODE_SESSION_ID / CODEX_SESSION_ID), as the runner user: PP_SESSION=$SID predict $1 …"
 }
 require_active() { [ "$(pp_kv_get "$STATE" active 2>/dev/null || true)" = 1 ] || die "this session is not under the protocol — run: predict on <journal> [--task | --loop]"; }
 journal_path() { pp_kv_get "$STATE" journal_path; }

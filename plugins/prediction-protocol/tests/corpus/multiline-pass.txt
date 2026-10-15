@@ -28,3 +28,11 @@ feat: cleanup
 rm -rf build no longer needed
 EOF2
 )"
+---
+apply_patch <<'EOF2'
+*** Begin Patch
+*** Add File: docs/notes.md
++the state lives under ~/.local/state/prediction-protocol/sessions/<id>/ — never edit it
++*** Update File: ~/.local/state/prediction-protocol/sessions/x/state is what a bypass looks like
+*** End Patch
+EOF2

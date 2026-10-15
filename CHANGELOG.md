@@ -5,6 +5,98 @@ All notable changes to this plugin. The format follows
 [SemVer](https://semver.org/). The single source of the version is
 `plugins/prediction-protocol/.claude-plugin/plugin.json`.
 
+## [1.1.0] — 2026-10-15
+
+The second harness. Codex CLI reads the same `hooks/hooks.json` with the
+same JSON contract, so the plugin needed no second manifest — but four
+platform facts differ, and each one is now a rule with a lint grep, a
+negative control and a probe row.
+
+### Added
+- **Harness decision per call** (`pp_harness`): Codex serialises `turn_id`
+  and `model` into every PreToolUse stdin and sets `PLUGIN_ROOT` for plugin
+  hooks; Claude Code does neither. `PP_HARNESS=claude|codex` is the operator's
+  override. `CLAUDE_*` environment names are deliberately not a signal — a
+  Codex started from a Claude Code shell inherits them (observed:
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID` and more arrive in Codex's
+  hooks and in its model's shell).
+- **`apply_patch` through the state guard**: on Codex a file edit is
+  `tool_name: apply_patch` with the patch in `tool_input.command`, selected by
+  the existing `Edit|Write` matcher. The guard reads its `*** Add File:` /
+  `*** Update File:` / `*** Delete File:` / `*** Move to:` headers — the
+  target paths, never the content. The classifier does the same for a patch
+  fed to `apply_patch` through the shell (`state-tamper`), two corpus blocks.
+- **`PREDICT` without an environment file**: when `CLAUDE_ENV_FILE` is unset
+  (Codex) `session-env.sh` prints a SessionStart `additionalContext` naming
+  `bin/predict`; the SKILL falls back to a glob over both plugin caches.
+- **Session id from either platform**: `predict` resolves `PP_SESSION`, else
+  `CLAUDE_CODE_SESSION_ID` or `CODEX_SESSION_ID` (equal to the hook's
+  `session_id`, verified); both set — one harness inside the other's shell —
+  is refused until `PP_SESSION` names the gate. Loop operator-only acts
+  recognise a Codex session too.
+- `tests/platform-probe.sh --codex`: an isolated `CODEX_HOME`, the lab gate's
+  trust written with the hash Codex computes (normalised identity → TOML →
+  sorted JSON → SHA-256, reproduced from `codex-rs` and checked against live
+  records), the fail-open matrix, then this checkout's real hooks as user
+  hooks: force-push outside the protocol, without a receipt, with one;
+  `apply_patch` into the state; SessionStart. Read-only sandbox by default
+  (`PROBE_SANDBOX=workspace-write` to let the push itself run).
+- `hook-engineering.md`: the Codex platform table, stdin, environment,
+  `permission_mode` derivation, trust records and their hash, the pid
+  namespace of the sandbox. README pair: Codex row, install, probe.
+
+### Changed
+- **The two `ask` cells deny on Codex.** Codex has no PreToolUse `ask`: a
+  hook that asks is marked failed and *the command runs* (documented, and
+  observed through the probe). Outside the protocol an interactive Codex
+  session is therefore denied with the reason and the two ways out (a plain
+  shell, or `predict on` + a receipt); with a matching receipt the gate passes
+  silently — the receipt is the witness, as in a delegated session, and
+  Codex's own approval flow still applies. Every other cell is unchanged;
+  `codex exec` under `approval_policy=never` arrives as
+  `permission_mode: bypassPermissions` and is a delegated session already.
+- `pp_mode` ignores an inherited `CLAUDE_CODE_ENTRYPOINT` on Codex;
+  `pp_delegated` consults the transcript on Claude Code only (a Codex rollout
+  carries no `permissionMode` marker; its text is content).
+- Version 1.1.0 in `plugin.json` and `PP_VERSION`; 179 controls, 329 corpus cases.
+
+### Acceptance (Codex CLI 0.162.1, `tests/platform-probe.sh --codex`, 2026-10-15)
+- The fail-open matrix through the platform: deny JSON and exit 2 block;
+  `ask`, exit 1, invalid JSON and a timeout overrun are all marked Failed and
+  **the command ran** — the `ask` row is the gap 1.1.0 closes.
+- `codex exec` always runs with approval `never`: a `-c approval_policy=on-request`
+  override still prints `approval: never` and reaches the hook as
+  `permission_mode: bypassPermissions`. So every exec session is the delegated
+  row (observed: a force-push outside the protocol passed the gate silently
+  and the sandbox decided); the interactive row (`default`) exists only in the
+  TUI/app and is covered by replaying the platform's own PreToolUse stdin
+  with `permission_mode: default` through the gate → deny, "cannot ask".
+- This checkout's real hooks as user hooks of an isolated `CODEX_HOME`: under
+  the protocol without a receipt → deny + recipe reached the model
+  ("Command blocked by PreToolUse hook: prediction-protocol v1.1.0 …"); with a
+  receipt → silent pass, receipt consumed; `apply_patch` into the state
+  directory → denied by the state guard, state unchanged; `session-env.sh`
+  → `SessionStart Completed`.
+- Stdin facts: `turn_id` and `model` on every PreToolUse; the model's shell has
+  `CODEX_SESSION_ID` equal to the hook's `session_id`; a Codex started from a
+  Claude Code shell inherits `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`
+  and the rest into its hooks and its model's shell (the reason the harness is
+  decided from stdin and `PLUGIN_ROOT`); the sandbox is its own pid namespace.
+  The trust-hash algorithm reproduced from `codex-rs` matched all six live
+  records of another plugin before the probe relied on it.
+- Not observed: the TUI itself (the deny-instead-of-ask row through a live
+  interactive Codex session — first interactive run to confirm); macOS.
+
+### Supply-chain self-check (`git diff v1.0.3..HEAD -- plugins/`)
+- Network verbs: none added (`curl|wget|fetch|http` hits are the existing
+  classifier vocabulary and corpus lines). Credentials: `tests/platform-probe.sh`
+  copies the user's own `~/.codex/auth.json` into its temporary lab home
+  (mode 0600, removed on exit) so the probe can run `codex exec` in an
+  isolated `CODEX_HOME` — named here, not silent. `rm -rf`: the probe's
+  `trap 'rm -rf "$W"'` on its own `mktemp -d`, as before, and fixture command
+  strings in `tests/run.sh` (`rm -rf ./cx`, like the existing rows). `eval`:
+  none added; `base64`: the gate's existing stdin transport.
+
 ## [1.0.3] — 2026-08-22
 
 ### Fixed
@@ -161,6 +253,7 @@ exported `PREDICT`): the fix applies to sessions started after the update.
   in an **interactive** session is asserted from the documentation, not yet
   observed — first interactive run to confirm.
 
+[1.1.0]: https://github.com/umar-s/prediction-protocol/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/umar-s/prediction-protocol/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/umar-s/prediction-protocol/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/umar-s/prediction-protocol/compare/v1.0.0...v1.0.1
