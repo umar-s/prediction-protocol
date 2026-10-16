@@ -27,8 +27,9 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   `unclassified` — both keyed by a runner's
   `PP_SESSION`, which the gate now resolves before it reads stdin. The hooks
   run outside any sandbox; a Codex model in `workspace-write` cannot write
-  the state (observed). The wrapper's and the state guard's recorders run
-  builtins only (bash >= 4.2). `pp_note_deny` is best-effort and decision-neutral —
+  the state (observed). All three recorders — the gate's `pp_note_deny`, the
+  wrapper's and the state guard's — run builtins only (bash >= 4.2).
+  `pp_note_deny` is best-effort and decision-neutral —
   an unwritable record never changes a deny (control).
 - `predict status --json` returns them as `denies` — `[{ts, class,
   command_b64}]`: the command's exact bytes, and pure ASCII, so the JSON is
@@ -38,7 +39,7 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 29 controls (208): the record for a gate deny; byte-exact round trips of a
+- 37 controls (216): the record for a gate deny; byte-exact round trips of a
   command with a newline, a tab and quotes and of one ending in `\n\n`; the
   state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
   spread over JSON whitespace; an unparsable input and a deadline overrun
@@ -52,8 +53,12 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   `gate-error`; the gate's literal deny and the state guard deny with `HOME`,
   `PP_STATE_DIR` and `XDG_STATE_HOME` unset; both deny and record with no
   external command on `PATH`; an empty record file counted as `corrupt`; 8
-  concurrent writers of 25 records of 20 000 characters, every command exact.
-  Lint pins each rule.
+  concurrent writers of 25 records of 20 000 characters, every command exact;
+  `gate_seen` intact beside deny records, non-empty and empty. Lint pins
+  each rule — the hook files whole by sha256, `pp_note_deny` by the sha256 of
+  its text and by the definition the gate actually runs after sourcing its
+  libraries — and six mutation controls run lint on a mutated copy of the
+  repository, each failing with its own message.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -140,19 +145,42 @@ several chunks (Required — one file per deny, created with noclobber,
 builtins only, no locks; the reader takes `deny-*` in name order and counts
 an empty record file as `corrupt`; a control with 8 concurrent writers of 25
 records of 20 000 characters each finds every command exact, and fails when
-the writers share one file).
+the writers share one file). Round 10 (`dd369ba`, ready with fixes): the
+new reader's loop flag reused the name `seen`, which in the same function
+scope holds the gate's liveness stamp, so once a deny record existed
+`status` printed `gate_seen` as `1` (`0` after an empty record file) instead
+of the utc or `never` — a canary's `gate_seen ≠ never` would have passed on a
+state-guard deny alone; a background security review found it too
+(Required — the flag is `got`; controls for a non-empty and an empty
+record, both failing on the round-10 reader; lint refuses a second `seen=`
+in `cmd_status`). `pp_note_deny` in the sourced `lib/common.sh` had no pin,
+though round 7's rule named three recorders (Required — lint pins the
+sha256 of its text, and compares the definition left after sourcing
+`common.sh` and `classify.sh` in both of the gate's orders with that text,
+checking that the builtins it runs are still builtins, so a later
+definition, an `eval`, an alias, `enable -n` or a function named `printf`
+fails; a second definition or a builtin-named function in any payload file
+fails by grep; six mutation controls in `tests/run.sh` run lint on a copy —
+unmutated it passes; an external command in the body, a second definition,
+an `eval`-built redefinition, an `eval`-built `printf` and the reader's
+flag renamed back each fail with their own message).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
 `curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
-`base64`. `rm -rf` — one hit, a command string the tests feed to the gate
-(never executed). `eval` — one hit, `ast.literal_eval` in a test helper
-reading an expected Python string literal. `base64` — nineteen hits, all
+`base64`. `rm -rf` — two hits, both in `tests/run.sh`: a command string the
+tests feed to the gate (never executed), and the lint mutation controls
+clearing their copy under the test's own `mktemp -d` dir. `eval` — six hits,
+all in `tests/run.sh`: `ast.literal_eval` in a test helper reading an
+expected Python string literal; the lint mutation controls applying their
+mutation snippet to that copy (one `eval`), and two of those snippets — an
+`eval`-built redefinition the lint must refuse — with their two labels.
+`base64` — nineteen hits, all
 the deny record: the gate keeping the parser's encoding, the state guard
 encoding a path (in pure bash since round 5), the reader's comments and grammar, the reference text, the
 tests. No
-network, no credentials. The hooks now append to a file in the session's
-own state dir — the only new write.
+network, no credentials. The hooks now create one file per deny in the
+session's own state dir — the only new write.
 
 ## [1.1.0] — 2026-10-15
 

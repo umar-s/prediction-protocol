@@ -40,6 +40,20 @@ for pin in "$P/hooks/predict-gate.sh 3368c90c8de634568432e75b5d30dc7b3036468846f
   set -- $pin
   [ "$({ sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -c1-64)" = "$2" ] || err "$(basename "$1") changed — its recorders must stay builtins only; re-pin its sha256 here only after the empty-PATH controls pass"
 done
+# the third recorder, pp_note_deny, lives in the sourced lib/common.sh, which no hook pin covers. Its text is pinned by
+# sha256; the definition the gate actually runs — common.sh and classify.sh sourced, in both of the gate's orders — must
+# be that text, with the builtins it runs still builtins (a later definition, an eval, an alias, `enable -n` or a function
+# named printf replaces it unseen by the text pin); and no payload file defines it a second time or a builtin it runs.
+nd="$(awk '/^pp_note_deny\(\) \{/{p=1} p{print} p&&/^}$/{exit}' $P/lib/common.sh)"
+[ "$(printf '%s\n' "$nd" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-64)" = 683c7016b2c8afd1129b68c821f76a9cb95fd46f801b8507540355d8946717c8 ] || err "pp_note_deny changed — its recorder must stay builtins only; re-pin its sha256 here only after the deny-record controls pass"
+nd_want="$(bash --norc --noprofile -c "$nd"$'\n''declare -f pp_note_deny' 2>/dev/null)"
+for order in "common classify" "classify common"; do
+  set -- $order
+  nd_have="$(bash --norc --noprofile -c '. "$1"; . "$2"; declare -f pp_note_deny; for b in printf set local return break [; do [ "$(type -t "$b")" = builtin ] || echo "shadowed: $b"; done' _ "$P/lib/$1.sh" "$P/lib/$2.sh" 2>/dev/null)"
+  [ -n "$nd_want" ] && [ "$nd_have" = "$nd_want" ] || err "the pp_note_deny the gate runs (lib/$1.sh, then lib/$2.sh) is not the pinned text, or a builtin it runs is shadowed"
+done
+[ "$(cat $P/lib/*.sh $P/hooks/*.sh $P/bin/predict | grep -cE 'pp_note_deny[[:space:]]*\(\)|function[[:space:]]+pp_note_deny')" -eq 1 ] || err "pp_note_deny is defined more than once (a later definition replaces the pinned one)"
+grep -nE '(^|[;{[:space:]])(function[[:space:]]+)?(printf|set|local|return|break|\[)[[:space:]]*\(\)|(^|[;&|[:space:]])enable[[:space:]]' $P/lib/*.sh $P/hooks/*.sh $P/bin/predict >/dev/null && err "a payload file defines or disables a builtin the recorders run"
 for f in "$P/hooks/predict-gate.sh" "$P/hooks/predict-state-guard.sh"; do grep -qF "TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1" "$f" || err "$(basename "$f") lost the builtin UTC timestamp"; done
 grep -q "^IFS= read -r -d '' input || true" $P/hooks/predict-state-guard.sh && ! grep -qF '$(cat)' $P/hooks/predict-state-guard.sh || err "the state guard must read stdin with the builtin read, not cat"
 grep -q '^  note "$1"$' $P/hooks/predict-state-guard.sh && grep -q 'state-guard' $P/hooks/predict-state-guard.sh || err "state guard lost the deny record"
@@ -52,6 +66,7 @@ done
 grep -qF 'for f in "$SDIR"/deny-*; do' $P/bin/predict && grep -qF 'an empty or unreadable record file is a deny whose writer died' $P/bin/predict || err "predict status lost the per-file reader or its empty-file rule"
 grep -q '"denies":\[%s\]' $P/bin/predict && grep -q 'command_b64' $P/bin/predict && grep -q 'counted as class `corrupt`' $P/bin/predict || err "predict status lost the denies list"
 grep -qF "tr '\000-\010\013-\037\177-\377' '[\001*]' < \"\$f\" 2>/dev/null)" $P/bin/predict || err "the status reader lost the byte mapping (NUL and foreign bytes must become a corrupt line, never vanish)"
+[ "$(awk '/^cmd_status\(\)/,/^}/' $P/bin/predict | grep -cE '(^|[^_[:alnum:]])seen=')" -eq 1 ] || err "predict status assigns seen more than once — it holds gate_seen, and the reader's own flag of that name overwrote it"
 grep -qF "([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\$'" $P/bin/predict && grep -q '"\$b64" =~ \$b64re' $P/bin/predict || err "the status reader lost the full base64 grammar"
 grep -q 'pp_delegated "$permission_mode" "$transcript_path"' $P/hooks/predict-gate.sh && [ "$(grep -c '\[ "$delegated" = 0 \] || pass' $P/hooks/predict-gate.sh)" -eq 2 ] || err "gate lost the delegated-session rule (auto mode must not ask; both ask sites)"
 grep -q 'auto|dontAsk|bypassPermissions' $P/lib/common.sh && grep -q '"permissionMode":"' $P/lib/common.sh || err "pp_delegated lost a mode or the transcript marker"

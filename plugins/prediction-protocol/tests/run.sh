@@ -331,6 +331,8 @@ PP_SESSION="dr-0" gate dr-0 'git push --force origin main' "$CX"; check "outside
 printf '\t\t\n\377\376\tvcs-force\tAAAA\n2026-10-16T00:00:00Z\tvcs-force\t%%%%not-base64\nno tabs at all\n' > "$PP_STATE_DIR/sessions/dr-1/deny-damaged"
 check "damaged lines (tabs only, invalid UTF-8, bad base64, no tabs) each count as corrupt, and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; d=json.load(sys.stdin)[\"denies\"]; print(len(d), [x[\"class\"] for x in d[-4:]])")" = "12 ['"'"'corrupt'"'"', '"'"'corrupt'"'"', '"'"'corrupt'"'"', '"'"'corrupt'"'"']" ]'
 check "the text status names the count" 'PP_SESSION=dr-1 "$predict" status | grep -q "denies=12"'
+gs() { PP_SESSION="$1" "$predict" status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["gate_seen"])'; }
+check "gate_seen survives the deny records: status --json still carries the gate's own utc stamp" '[ -s "$PP_STATE_DIR/sessions/dr-1/hook-seen" ] && [ "$(gs dr-1)" = "$(cat "$PP_STATE_DIR/sessions/dr-1/hook-seen")" ] && PP_SESSION=dr-1 "$predict" status | grep -qF "gate: seen $(cat "$PP_STATE_DIR/sessions/dr-1/hook-seen")"'
 PP_SESSION="dr-2" "$predict" on DR-2 --task >/dev/null
 one() { PP_SESSION=dr-2 "$predict" status --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["denies"]; print(len(d), d[0]["class"] if d else "-", d[0]["command_b64"] if d else "-")'; }
 printf '\000' > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "a file of one NUL (no newline) is one corrupt record, not none" '[ "$(one)" = "1 corrupt " ]'
@@ -338,6 +340,7 @@ printf '2026-10-16T00:00:00Z\tvcs-force\tY\000Q==\n' > "$PP_STATE_DIR/sessions/d
 for b in A '=' 'A==' 'YQ'; do printf '2026-10-16T00:00:00Z\tvcs-force\t%s\n' "$b" > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "base64 '$b' (not the full grammar) is corrupt" '[ "$(one)" = "1 corrupt " ]'; done
 printf '2026-10-16T00:00:00Z\tvcs-force\tYQ==\n' > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "a well-formed line passes as itself" '[ "$(one)" = "1 vcs-force YQ==" ]'
 : > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "an empty record file (its writer died) is one corrupt deny, not none" '[ "$(one)" = "1 corrupt " ]'
+check "an empty record file leaves gate_seen as it is (never: the gate never ran in this session)" '[ "$(gs dr-2)" = never ]'
 PP_SESSION="dr-4" "$predict" on DR-4 --task >/dev/null
 for w in 1 2 3 4 5 6 7 8; do
   ( . "$P/lib/common.sh"; for k in $(seq 1 25); do pp_note_deny "$PP_STATE_DIR/sessions/dr-4" vcs-force "$(python3 -c 'import base64,sys; print(base64.b64encode((sys.argv[1]+"-"+"x"*20000).encode()).decode())' "w$w-k$k")"; done ) &
@@ -368,6 +371,27 @@ chmod 555 "$PP_STATE_DIR/sessions/dr-1"; PP_SESSION="dr-1" gate dr-1 'git push -
 check "an unwritable record never changes the decision" 'is_deny'
 PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"
 check "a malformed active value reads as 0 and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"active\"])")" = 0 ]'
+
+echo "# 19 lint holds the recorders and the status reader: each mutation of a copy must fail scripts/lint.sh with its own message"
+R="$(cd "$P/../.." && pwd)"
+lintneg() {   # label  expected-message  mutation (a shell snippet over $M, the copy's plugin dir)
+  local want="$2" rc
+  rm -rf "$T/lintneg"; mkdir -p "$T/lintneg"; tar -C "$R" --exclude=.git -cf - . | tar -C "$T/lintneg" -xf -
+  M="$T/lintneg/plugins/prediction-protocol"; eval "$3" || { bad "$1: the mutation did not apply"; return; }
+  bash "$T/lintneg/scripts/lint.sh" > "$T/lintneg.out" 2>&1; rc=$?
+  if [ -z "$want" ]; then check "$1" '[ $rc -eq 0 ]'; else check "$1" '[ $rc -ne 0 ] && grep -qF -- "$want" "$T/lintneg.out"'; fi
+}
+lintneg "the unmutated copy passes lint (the controls below fail for their mutation alone)" "" ":"
+lintneg "an external command in pp_note_deny's body fails its sha256 pin" "pp_note_deny changed" \
+  'sed -i "s/^  local ts=\"\" f i r\$/  local ts=\"\" f i r; : \"\$(date)\"/" "$M/lib/common.sh"; grep -qF ": \"\$(date)\"" "$M/lib/common.sh"'
+lintneg "a second definition in classify.sh (sourced after common.sh) fails the effective-definition check" "is not the pinned text" \
+  'printf "\npp_note_deny() { sleep 30; return 0; }\n" >> "$M/lib/classify.sh"'
+lintneg "an eval-built redefinition, which no grep for the name sees, fails the effective-definition check" "is not the pinned text" \
+  'printf "\neval \"pp_note\"\"_deny() { sleep 30; }\"\n" >> "$M/lib/classify.sh"'
+lintneg "an eval-built function named printf (a builtin the recorder runs) fails as shadowed" "is not the pinned text, or a builtin it runs is shadowed" \
+  'printf "\neval \"pri\"\"ntf() { builtin printf \\\"\\\$@\\\"; }\"\n" >> "$M/lib/common.sh"'
+lintneg "the status reader's flag named seen again (gate_seen clobbered) fails lint" "predict status assigns seen more than once" \
+  'sed -i "/^cmd_status()/,/^}/s/\bgot=/seen=/" "$M/bin/predict"; grep -q "^    seen=0\$" "$M/bin/predict"'
 
 echo "tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -157,13 +157,13 @@ cmd_status() {
   # Bytes first: bash `read` drops NUL, so every byte a record never holds (controls but
   # TAB and LF, DEL, non-ASCII, NUL) becomes \001 before the shell sees it — a byte that
   # fails every check below, so such a line is `corrupt`, never silently repaired or lost.
-  local denies="" dn=0 line ts rest cls b64 tab=$'\t' f seen
+  local denies="" dn=0 line ts rest cls b64 tab=$'\t' f got   # not `seen`: that holds gate_seen (one function scope)
   local b64re='^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$'   # full grammar: quartets, padding only at the end
   for f in "$SDIR"/deny-*; do   # one file per deny (pp_note_deny); in name order — the names start with the utc
     [ -e "$f" ] || continue
-    seen=0
+    got=0
     while IFS= read -r line || [ -n "$line" ]; do
-      seen=1
+      got=1
       ts="" cls="corrupt" b64=""
       if [[ "$line" == *"$tab"*"$tab"* ]]; then
         ts="${line%%"$tab"*}"; rest="${line#*"$tab"}"; cls="${rest%%"$tab"*}"; b64="${rest#*"$tab"}"
@@ -174,7 +174,7 @@ cmd_status() {
       denies="$denies{\"ts\":\"$ts\",\"class\":\"$cls\",\"command_b64\":\"$b64\"}"
       dn=$((dn+1))
     done < <(LC_ALL=C tr '\000-\010\013-\037\177-\377' '[\001*]' < "$f" 2>/dev/null)
-    if [ "$seen" = 0 ]; then   # an empty or unreadable record file is a deny whose writer died — counted, never dropped
+    if [ "$got" = 0 ]; then   # an empty or unreadable record file is a deny whose writer died — counted, never dropped
       [ "$dn" -eq 0 ] || denies="$denies,"
       denies="$denies{\"ts\":\"\",\"class\":\"corrupt\",\"command_b64\":\"\"}"
       dn=$((dn+1))
