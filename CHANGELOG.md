@@ -125,7 +125,12 @@ command names — `sleep 30` or a second substitution on the record line
 passed it (Required — each recorder body is pinned by its sha256: any change
 fails lint until it is re-pinned on purpose, next to the empty-PATH
 controls that prove the body still denies and records without an external
-process; the reviewer's two mutations and two more are shown to fail).
+process; the reviewer's two mutations and two more are shown to fail). Round 8
+(`e2c8b58`, not ready): the extractor pinned the first definition of a
+function, so a redefinition earlier in the file replaced the recorder unseen
+(Required — both hook files are pinned whole by sha256; an edit fails lint
+until re-pinned after the empty-PATH controls pass; redefinition mutations
+shown to fail).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for

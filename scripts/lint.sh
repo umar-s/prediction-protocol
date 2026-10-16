@@ -32,15 +32,13 @@ grep -qF 'sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"
 grep -qF "printf '%s\\tgate-error\\t\\n'" $P/hooks/predict-gate.sh && grep -qF 'd="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-gate.sh || err "deny_literal lost its own gate-error record (every wrapper deny must be recorded, HOME-safe)"
 grep -qF '${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-state-guard.sh || err "the state guard's record must not depend on HOME being set (set -u would end the hook before its deny)"
 # the recorders that run before a deny prints are builtins only: an external process that hung would hold the deny past
-# the platform's timeout. A blacklist of command names cannot hold that (sleep, a second substitution on the same line),
-# so each body is pinned exactly: any change fails here until the pin is updated on purpose, next to the empty-PATH
-# controls in tests/run.sh that show the changed body still denies and records without an external process.
-fbody() { awk -v f="$2" '$0 ~ "^"f"\\(\\) \\{" {on=1} on {print} on && /^}/ {exit}' "$1"; }
-for pin in "$P/hooks/predict-gate.sh deny_literal 01ce8a39dcee9a1f9f0ae99aed3b97dd305f9a24107f025467b7d5a43eb4b4a4" \
-           "$P/hooks/predict-state-guard.sh note e8cb58a4ccb7d11571838c6b26ae9852220ed55cd84b5ac1714791e46f2f1872" \
-           "$P/hooks/predict-state-guard.sh b64 fd54a03fc18a244ff45489d65376ef359ecc521bd33a870138af03a81977179c"; do
+# the platform's timeout. Neither a blacklist of command names (sleep, a second substitution) nor a pin of the first
+# definition of a function (a redefinition replaces it) can hold that, so both hook files are pinned whole: any edit
+# fails here until the pin is updated on purpose, after tests/run.sh's empty-PATH controls pass on the edited hook.
+for pin in "$P/hooks/predict-gate.sh 13f2b91a4c2a1697670d471e75b9502067b9d08237e5ce46b259d6b3369e7ec3" \
+           "$P/hooks/predict-state-guard.sh 1e8ac55bf9db978ab416e8b05b68b28eae5f2d24752905cd263432ac5957efa7"; do
   set -- $pin
-  [ "$(fbody "$1" "$2" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-64)" = "$3" ] || err "recorder $2 changed — it must stay builtins only; re-pin its sha256 here only after the empty-PATH controls pass"
+  [ "$({ sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -c1-64)" = "$2" ] || err "$(basename "$1") changed — its recorders must stay builtins only; re-pin its sha256 here only after the empty-PATH controls pass"
 done
 for f in "$P/hooks/predict-gate.sh" "$P/hooks/predict-state-guard.sh"; do grep -qF "TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1" "$f" || err "$(basename "$f") lost the builtin UTC timestamp"; done
 grep -q "^IFS= read -r -d '' input || true" $P/hooks/predict-state-guard.sh && ! grep -qF '$(cat)' $P/hooks/predict-state-guard.sh || err "the state guard must read stdin with the builtin read, not cat"
