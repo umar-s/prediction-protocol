@@ -115,7 +115,12 @@ would have left a corrupt record (Required — both recorders are builtins
 only: `printf '%(…)T'` for the time, a pure-bash base64 in the guard,
 `read -d ''` for its stdin; bash >= 4.2); the HOME controls left
 `PP_STATE_DIR` set, so `$HOME` was never evaluated (Required — they unset
-all three; controls with an empty `PATH`).
+all three; controls with an empty `PATH`). Round 6 (`e26c41b`, not ready): the
+builtins-only rule had controls but no lint pin (Required — lint extracts
+the bodies of `deny_literal`, the guard's `note` and `b64` and refuses an
+external command or a command substitution there, and pins the builtin
+timestamp and the guard's builtin stdin read; each pin shown to fail when
+its rule is broken).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
