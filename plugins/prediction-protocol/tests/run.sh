@@ -331,6 +331,12 @@ PP_SESSION="dr-0" gate dr-0 'git push --force origin main' "$CX"; check "outside
 printf '\t\t\n\377\376\tvcs-force\tAAAA\n2026-10-16T00:00:00Z\tvcs-force\t%%%%not-base64\nno tabs at all\n' >> "$PP_STATE_DIR/sessions/dr-1/denies"
 check "damaged lines (tabs only, invalid UTF-8, bad base64, no tabs) each count as corrupt, and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; d=json.load(sys.stdin)[\"denies\"]; print(len(d), [x[\"class\"] for x in d[-4:]])")" = "12 ['"'"'corrupt'"'"', '"'"'corrupt'"'"', '"'"'corrupt'"'"', '"'"'corrupt'"'"']" ]'
 check "the text status names the count" 'PP_SESSION=dr-1 "$predict" status | grep -q "denies=12"'
+PP_SESSION="dr-2" "$predict" on DR-2 --task >/dev/null
+one() { PP_SESSION=dr-2 "$predict" status --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["denies"]; print(len(d), d[0]["class"] if d else "-", d[0]["command_b64"] if d else "-")'; }
+printf '\000' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a file of one NUL (no newline) is one corrupt record, not none" '[ "$(one)" = "1 corrupt " ]'
+printf '2026-10-16T00:00:00Z\tvcs-force\tY\000Q==\n' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a NUL inside the base64 makes the line corrupt, never a repaired command" '[ "$(one)" = "1 corrupt " ]'
+for b in A '=' 'A==' 'YQ'; do printf '2026-10-16T00:00:00Z\tvcs-force\t%s\n' "$b" > "$PP_STATE_DIR/sessions/dr-2/denies"; check "base64 '$b' (not the full grammar) is corrupt" '[ "$(one)" = "1 corrupt " ]'; done
+printf '2026-10-16T00:00:00Z\tvcs-force\tYQ==\n' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a well-formed line passes as itself" '[ "$(one)" = "1 vcs-force YQ==" ]'
 chmod 000 "$PP_STATE_DIR/sessions/dr-1/denies"; PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; chmod 644 "$PP_STATE_DIR/sessions/dr-1/denies"
 check "an unwritable record never changes the decision" 'is_deny'
 PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"

@@ -100,6 +100,14 @@ and leaves every deny in place. No mode flag is exchanged between plugins.
   the state; an unsandboxed Claude shell can, as it can the rest of the
   state. Best-effort and decision-neutral: an unwritable record never
   changes a deny.
+- The state guard is a tripwire for honest edits, not the boundary: it
+  reads the target path from the stdin JSON text (no parser — the hook
+  sources nothing), so a symlink to the state, or a path a harness would
+  serialise with JSON escapes, passes it. Neither opens a new door — on
+  Codex the sandbox refuses the write anyway (the state is outside
+  `workspace-write`), and an unsandboxed Claude shell can write the state
+  directly. Claude Code and Codex 0.162.1 serialise `tool_input` without
+  escaping `/` or non-ASCII. A JSON parse plus `realpath` is a candidate.
 - The version is in every reason; the platform table above is re-verified
   with `tests/platform-probe.sh` before a release.
 - `PostToolUse` cannot block or undo — grading lives in the CLI, not in a

@@ -33,14 +33,16 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 14 controls (193): the record for a gate deny; byte-exact round trips of a
+- 21 controls (200): the record for a gate deny; byte-exact round trips of a
   command with a newline, a tab and quotes and of one ending in `\n\n`; the
   state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
   spread over JSON whitespace; an unparsable input and a deadline overrun
   recorded under `PP_SESSION`; nothing written outside the protocol; damaged
   lines (tabs only, invalid UTF-8, bad base64, no tabs) counted as `corrupt` with the
   JSON intact; an unwritable record leaving the deny intact; a malformed
-  `active` value; a pretty-printed `apply_patch` refused. Lint pins each rule.
+  `active` value; a pretty-printed `apply_patch` refused; a file of one NUL,
+  a NUL inside the base64 and base64 outside the full grammar (`A`, `=`,
+  `A==`, `YQ`) counted as `corrupt`. Lint pins each rule.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -51,6 +53,14 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
 - `predict status --json` printed the raw `active` value; anything but `0`
   or `1` (a hand-edited state) made the output invalid JSON. It now reads as
   `0` — not active.
+
+### Known limitation (named, not fixed here)
+- The state guard reads the target path from the stdin JSON text, not
+  through a parser, so a symlink to the state or a JSON-escaped path passes
+  it (a background security review of this release named it). It is a
+  tripwire, not the boundary: on Codex the sandbox refuses the write anyway,
+  and an unsandboxed Claude shell writes the state directly. A JSON parse
+  with `realpath` resolution is a candidate for the next patch.
 
 ### Verified
 - Live through Codex CLI 0.162.1 (`codex exec -s read-only`, the dev hooks
@@ -68,7 +78,12 @@ the state guard's session regex took at most one space — all Required, all
 fixed (the record keeps the parser's base64, `command_b64`, a tab-splitting
 reader with `corrupt`, the early session dir, JSON whitespace in the guard,
 which also exposed the compact-only path match above). The FYI on the
-reader's cost is met by the single pass without per-field escaping.
+reader's cost is met by the single pass without per-field escaping. Round 2
+(`74febc8`, not ready): bash `read` drops NUL, so a NUL-only file read as no
+deny and a NUL inside the base64 was silently repaired; the base64 check
+took the alphabet, not the grammar — both Required, fixed (bytes a record
+never holds become \001 before the shell reads them, so the line is
+`corrupt`; the full base64 grammar).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
