@@ -29,23 +29,29 @@ grep -q 'hook-seen' $P/hooks/predict-gate.sh || err "gate lost the liveness stam
 # the deny record: every deny of a session with a state dir is written, by both hooks and the wrapper, and read back by status
 grep -q '^deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${cmd_b64:-}";' $P/hooks/predict-gate.sh || err "gate deny() lost the deny record"
 grep -qF 'sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"; then sdir=' $P/hooks/predict-gate.sh || err "gate lost the early session dir (a deny before stdin is parsed must still be recorded)"
-grep -qF "printf '%s\\tgate-error\\t\\n'" $P/hooks/predict-gate.sh && grep -qF 'd="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-gate.sh || err "deny_literal lost its own gate-error record (every wrapper deny must be recorded, HOME-safe)"
+grep -qF "printf '%s\\t%s\\t%s\\n' \"\$ts\" gate-error \"\" 2>/dev/null > \"\$f\"" $P/hooks/predict-gate.sh && grep -qF 'd="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-gate.sh || err "deny_literal lost its own gate-error record (every wrapper deny must be recorded, HOME-safe)"
 grep -qF '${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-state-guard.sh || err "the state guard's record must not depend on HOME being set (set -u would end the hook before its deny)"
 # the recorders that run before a deny prints are builtins only: an external process that hung would hold the deny past
 # the platform's timeout. Neither a blacklist of command names (sleep, a second substitution) nor a pin of the first
 # definition of a function (a redefinition replaces it) can hold that, so both hook files are pinned whole: any edit
 # fails here until the pin is updated on purpose, after tests/run.sh's empty-PATH controls pass on the edited hook.
-for pin in "$P/hooks/predict-gate.sh 13f2b91a4c2a1697670d471e75b9502067b9d08237e5ce46b259d6b3369e7ec3" \
-           "$P/hooks/predict-state-guard.sh 1e8ac55bf9db978ab416e8b05b68b28eae5f2d24752905cd263432ac5957efa7"; do
+for pin in "$P/hooks/predict-gate.sh 3368c90c8de634568432e75b5d30dc7b3036468846ffef0bb184f22b15bef367" \
+           "$P/hooks/predict-state-guard.sh 4505206925e7f71e8171ab33cfd72671cae18f34cf1d0ac0979b3b1833968942"; do
   set -- $pin
   [ "$({ sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -c1-64)" = "$2" ] || err "$(basename "$1") changed — its recorders must stay builtins only; re-pin its sha256 here only after the empty-PATH controls pass"
 done
 for f in "$P/hooks/predict-gate.sh" "$P/hooks/predict-state-guard.sh"; do grep -qF "TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1" "$f" || err "$(basename "$f") lost the builtin UTC timestamp"; done
 grep -q "^IFS= read -r -d '' input || true" $P/hooks/predict-state-guard.sh && ! grep -qF '$(cat)' $P/hooks/predict-state-guard.sh || err "the state guard must read stdin with the builtin read, not cat"
 grep -q '^  note "$1"$' $P/hooks/predict-state-guard.sh && grep -q 'state-guard' $P/hooks/predict-state-guard.sh || err "state guard lost the deny record"
-grep -q 'never changes a decision' $P/lib/common.sh && grep -q '2>/dev/null || true' $P/lib/common.sh || err "pp_note_deny must stay best-effort and decision-neutral"
+grep -q 'never changes a decision' $P/lib/common.sh && grep -qF 'set -C; printf' $P/lib/common.sh || err "pp_note_deny must stay best-effort, decision-neutral and one file per record"
+# one file per deny, created with noclobber, in every writer: concurrent long records in one appended file interleave
+for f in $P/lib/common.sh $P/hooks/predict-gate.sh $P/hooks/predict-state-guard.sh; do
+  grep -qF '/deny-${ts//[-:]/}-${BASHPID:-$$}-$RANDOM$RANDOM"' "$f" && grep -qF 'set -C; printf' "$f" || err "$(basename "$f") lost the one-file-per-deny record"
+  grep -qE '>> *"[^"]*/denies' "$f" && err "$(basename "$f") appends to a shared denies file (records interleave)"
+done
+grep -qF 'for f in "$SDIR"/deny-*; do' $P/bin/predict && grep -qF 'an empty or unreadable record file is a deny whose writer died' $P/bin/predict || err "predict status lost the per-file reader or its empty-file rule"
 grep -q '"denies":\[%s\]' $P/bin/predict && grep -q 'command_b64' $P/bin/predict && grep -q 'counted as class `corrupt`' $P/bin/predict || err "predict status lost the denies list"
-grep -qF "tr '\000-\010\013-\037\177-\377' '[\001*]' < \"\$SDIR/denies\"" $P/bin/predict || err "the status reader lost the byte mapping (NUL and foreign bytes must become a corrupt line, never vanish)"
+grep -qF "tr '\000-\010\013-\037\177-\377' '[\001*]' < \"\$f\" 2>/dev/null)" $P/bin/predict || err "the status reader lost the byte mapping (NUL and foreign bytes must become a corrupt line, never vanish)"
 grep -qF "([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\$'" $P/bin/predict && grep -q '"\$b64" =~ \$b64re' $P/bin/predict || err "the status reader lost the full base64 grammar"
 grep -q 'pp_delegated "$permission_mode" "$transcript_path"' $P/hooks/predict-gate.sh && [ "$(grep -c '\[ "$delegated" = 0 \] || pass' $P/hooks/predict-gate.sh)" -eq 2 ] || err "gate lost the delegated-session rule (auto mode must not ask; both ask sites)"
 grep -q 'auto|dontAsk|bypassPermissions' $P/lib/common.sh && grep -q '"permissionMode":"' $P/lib/common.sh || err "pp_delegated lost a mode or the transcript marker"

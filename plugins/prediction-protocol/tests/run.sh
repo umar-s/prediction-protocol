@@ -328,15 +328,26 @@ check "an early deny (unparsable input) is recorded under a runner's PP_SESSION,
 OUT="$(stdin dr-1 'git push --force origin main' | PP_SESSION="dr-1" PP_DEADLINE=1 PP_TEST_SLEEP=3 bash "$gate" 2>/dev/null)"; GRC=$?; dis dr-1 7 gate-error "''"; r=$?
 check "a deadline overrun is recorded by the wrapper as gate-error, command unknown" 'is_deny && [ $r -eq 0 ]'
 PP_SESSION="dr-0" gate dr-0 'git push --force origin main' "$CX"; check "outside the protocol (no state dir) a deny writes nothing" 'is_deny && [ ! -e "$PP_STATE_DIR/sessions/dr-0" ]'
-printf '\t\t\n\377\376\tvcs-force\tAAAA\n2026-10-16T00:00:00Z\tvcs-force\t%%%%not-base64\nno tabs at all\n' >> "$PP_STATE_DIR/sessions/dr-1/denies"
+printf '\t\t\n\377\376\tvcs-force\tAAAA\n2026-10-16T00:00:00Z\tvcs-force\t%%%%not-base64\nno tabs at all\n' > "$PP_STATE_DIR/sessions/dr-1/deny-damaged"
 check "damaged lines (tabs only, invalid UTF-8, bad base64, no tabs) each count as corrupt, and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; d=json.load(sys.stdin)[\"denies\"]; print(len(d), [x[\"class\"] for x in d[-4:]])")" = "12 ['"'"'corrupt'"'"', '"'"'corrupt'"'"', '"'"'corrupt'"'"', '"'"'corrupt'"'"']" ]'
 check "the text status names the count" 'PP_SESSION=dr-1 "$predict" status | grep -q "denies=12"'
 PP_SESSION="dr-2" "$predict" on DR-2 --task >/dev/null
 one() { PP_SESSION=dr-2 "$predict" status --json | python3 -c 'import json,sys; d=json.load(sys.stdin)["denies"]; print(len(d), d[0]["class"] if d else "-", d[0]["command_b64"] if d else "-")'; }
-printf '\000' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a file of one NUL (no newline) is one corrupt record, not none" '[ "$(one)" = "1 corrupt " ]'
-printf '2026-10-16T00:00:00Z\tvcs-force\tY\000Q==\n' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a NUL inside the base64 makes the line corrupt, never a repaired command" '[ "$(one)" = "1 corrupt " ]'
-for b in A '=' 'A==' 'YQ'; do printf '2026-10-16T00:00:00Z\tvcs-force\t%s\n' "$b" > "$PP_STATE_DIR/sessions/dr-2/denies"; check "base64 '$b' (not the full grammar) is corrupt" '[ "$(one)" = "1 corrupt " ]'; done
-printf '2026-10-16T00:00:00Z\tvcs-force\tYQ==\n' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a well-formed line passes as itself" '[ "$(one)" = "1 vcs-force YQ==" ]'
+printf '\000' > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "a file of one NUL (no newline) is one corrupt record, not none" '[ "$(one)" = "1 corrupt " ]'
+printf '2026-10-16T00:00:00Z\tvcs-force\tY\000Q==\n' > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "a NUL inside the base64 makes the line corrupt, never a repaired command" '[ "$(one)" = "1 corrupt " ]'
+for b in A '=' 'A==' 'YQ'; do printf '2026-10-16T00:00:00Z\tvcs-force\t%s\n' "$b" > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "base64 '$b' (not the full grammar) is corrupt" '[ "$(one)" = "1 corrupt " ]'; done
+printf '2026-10-16T00:00:00Z\tvcs-force\tYQ==\n' > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "a well-formed line passes as itself" '[ "$(one)" = "1 vcs-force YQ==" ]'
+: > "$PP_STATE_DIR/sessions/dr-2/deny-test"; check "an empty record file (its writer died) is one corrupt deny, not none" '[ "$(one)" = "1 corrupt " ]'
+PP_SESSION="dr-4" "$predict" on DR-4 --task >/dev/null
+for w in 1 2 3 4 5 6 7 8; do
+  ( . "$P/lib/common.sh"; for k in $(seq 1 25); do pp_note_deny "$PP_STATE_DIR/sessions/dr-4" vcs-force "$(python3 -c 'import base64,sys; print(base64.b64encode((sys.argv[1]+"-"+"x"*20000).encode()).decode())' "w$w-k$k")"; done ) &
+done; wait
+check "8 concurrent writers x 25 records of 20 000 characters: 200 denies, every command exact, none corrupt" '[ "$(PP_SESSION=dr-4 "$predict" status --json | python3 -c "
+import json,sys,base64
+d=json.load(sys.stdin)[\"denies\"]
+want={\"w%d-k%d-\"%(w,k)+\"x\"*20000 for w in range(1,9) for k in range(1,26)}
+got=[base64.b64decode(x[\"command_b64\"]).decode() for x in d if x[\"class\"]==\"vcs-force\"]
+print(len(d), len(got)==200 and set(got)==want)")" = "200 True" ]'
 PP_SESSION="dr-3" "$predict" on DR-3 --task >/dev/null
 cp -a "$P" "$T/nolib3"; rm "$T/nolib3/lib/common.sh"
 OUT="$(stdin dr-3 'git push --force origin main' | PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?; dis dr-3 0 gate-error "''"; r=$?
@@ -353,7 +364,7 @@ OUT="$(stdin dr-3 'git push --force origin main' | PATH=/nonexistent PP_SESSION=
 check "no external command on PATH (no cat, no date): the wrapper still denies and records a well-formed gate-error" 'is_deny && [ $r -eq 0 ]'
 OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/dr-3/state"}}' "$PP_STATE_DIR" | PATH=/nonexistent PP_SESSION="dr-3" "$BASH_BIN" "$guard" 2>/dev/null)"; GRC=$?; dis dr-3 3 state-guard "'$PP_STATE_DIR/sessions/dr-3/state'"; r=$?
 check "no external command on PATH (no cat, date, base64, tr): the state guard still denies and records the exact path" 'is_deny && [ $r -eq 0 ]'
-chmod 000 "$PP_STATE_DIR/sessions/dr-1/denies"; PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; chmod 644 "$PP_STATE_DIR/sessions/dr-1/denies"
+chmod 555 "$PP_STATE_DIR/sessions/dr-1"; PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; chmod 755 "$PP_STATE_DIR/sessions/dr-1"
 check "an unwritable record never changes the decision" 'is_deny'
 PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"
 check "a malformed active value reads as 0 and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"active\"])")" = 0 ]'

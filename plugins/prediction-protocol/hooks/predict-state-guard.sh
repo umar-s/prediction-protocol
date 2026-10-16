@@ -29,13 +29,18 @@ b64() {   # base64 of $1 in pure bash (LC_ALL=C: one character is one byte)
   printf '%s' "$o"
 }
 note() {
-  local s="${PP_SESSION:-}" d ts=""
+  local s="${PP_SESSION:-}" d ts="" f i r c
   if [ -z "$s" ] && [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then s="${BASH_REMATCH[1]}"; fi   # any JSON whitespace around the colon
   [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || return 0
   d="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"   # ${HOME:-}: set -u must not end the hook before its deny
   [ -d "$d" ] || return 0
   TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || ts=""
-  { printf '%s\tstate-guard\t%s\n' "$ts" "$(b64 "$1")" >> "$d/denies"; } 2>/dev/null || true
+  c="$(b64 "$1")"
+  for i in 1 2 3; do   # one record, one file, created with noclobber: a single writer per file, so a long record is never interleaved
+    f="$d/deny-${ts//[-:]/}-${BASHPID:-$$}-$RANDOM$RANDOM"
+    set -C; printf '%s\t%s\t%s\n' "$ts" state-guard "$c" 2>/dev/null > "$f"; r=$?; set +C
+    [ "$r" -eq 0 ] && break
+  done
 }
 deny() {
   note "$1"

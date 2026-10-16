@@ -15,7 +15,9 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
 
 ### Added
 - Every deny the gate or the state guard issues for a session whose state
-  dir exists appends one line to `denies` in that dir: utc, class, and the
+  dir exists writes one file in that dir, `deny-<utc>-<pid>-<random>`,
+  created with noclobber (one writer per file — concurrent long records in
+  one appended file interleave; no locks), holding one line: utc, class, and the
   command's base64 **as the stdin parser produced it** (never decoded and
   re-encoded: a shell decode drops trailing newlines); the state guard writes
   `state-guard` and the refused path; the outer wrapper writes `gate-error`
@@ -36,7 +38,7 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 27 controls (206): the record for a gate deny; byte-exact round trips of a
+- 29 controls (208): the record for a gate deny; byte-exact round trips of a
   command with a newline, a tab and quotes and of one ending in `\n\n`; the
   state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
   spread over JSON whitespace; an unparsable input and a deadline overrun
@@ -49,7 +51,9 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   load (common.sh missing, classify.sh missing — then even `ls`) recorded as
   `gate-error`; the gate's literal deny and the state guard deny with `HOME`,
   `PP_STATE_DIR` and `XDG_STATE_HOME` unset; both deny and record with no
-  external command on `PATH`. Lint pins each rule.
+  external command on `PATH`; an empty record file counted as `corrupt`; 8
+  concurrent writers of 25 records of 20 000 characters, every command exact.
+  Lint pins each rule.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -130,14 +134,20 @@ process; the reviewer's two mutations and two more are shown to fail). Round 8
 function, so a redefinition earlier in the file replaced the recorder unseen
 (Required — both hook files are pinned whole by sha256; an edit fails lint
 until re-pinned after the empty-PATH controls pass; redefinition mutations
-shown to fail).
+shown to fail). Round 9 (`73e9c00`, not ready): a single appended `denies`
+file interleaved concurrent long records — `printf` writes a long line in
+several chunks (Required — one file per deny, created with noclobber,
+builtins only, no locks; the reader takes `deny-*` in name order and counts
+an empty record file as `corrupt`; a control with 8 concurrent writers of 25
+records of 20 000 characters each finds every command exact, and fails when
+the writers share one file).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
 `curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
 `base64`. `rm -rf` — one hit, a command string the tests feed to the gate
 (never executed). `eval` — one hit, `ast.literal_eval` in a test helper
-reading an expected Python string literal. `base64` — seventeen hits, all
+reading an expected Python string literal. `base64` — nineteen hits, all
 the deny record: the gate keeping the parser's encoding, the state guard
 encoding a path (in pure bash since round 5), the reader's comments and grammar, the reference text, the
 tests. No

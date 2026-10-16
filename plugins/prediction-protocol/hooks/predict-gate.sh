@@ -34,11 +34,17 @@ PP_VERSION=unknown
 # the deny past the platform's timeout. Best-effort, never fatal (${HOME:-}: an unset
 # variable under set -u must not end the hook before its deny is printed). bash >= 4.2.
 deny_literal() {
-  local s="${PP_SESSION:-}" d ts=""
+  local s="${PP_SESSION:-}" d ts="" f i r
   if [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
     d="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"
     TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || ts=""
-    if [ -d "$d" ]; then { printf '%s\tgate-error\t\n' "$ts" >> "$d/denies"; } 2>/dev/null || true; fi
+    if [ -d "$d" ]; then
+      for i in 1 2 3; do   # one record, one file, created with noclobber: a single writer per file, so a long record is never interleaved
+        f="$d/deny-${ts//[-:]/}-${BASHPID:-$$}-$RANDOM$RANDOM"
+        set -C; printf '%s\t%s\t%s\n' "$ts" gate-error "" 2>/dev/null > "$f"; r=$?; set +C
+        [ "$r" -eq 0 ] && break
+      done
+    fi
   fi
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"prediction-protocol v%s: %s"}}\n' "$PP_VERSION" "$1"
   printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2

@@ -49,17 +49,25 @@ pp_json_str() {
   printf '"%s"' "$s"
 }
 pp_session_dir() { printf '%s/sessions/%s' "$PP_STATE_ROOT" "$1"; }
-# The deny record: one line per deny the hooks issue for a session that has a
-# state dir — utc, class, base64 of the exact command as it arrived (the
-# parser's own encoding, never decoded and re-encoded: a shell decode drops
-# trailing newlines; base64 keeps a command with newlines or tabs one record).
-# The hooks run outside any sandbox, a sandboxed model (Codex workspace-write)
-# cannot write here, and a consumer reads it through `predict status --json`
-# (`denies`), never from a log. It never changes a decision: no state dir →
-# nothing written; any error ignored.
+# The deny record: one file per deny the hooks issue for a session that has a
+# state dir (deny-<utc>-<pid>-<random>, never shared — concurrent long records
+# in one appended file interleave), one line: utc, class, base64 of the exact
+# command as it arrived (the parser's own encoding, never decoded and
+# re-encoded: a shell decode drops trailing newlines). The hooks run outside
+# any sandbox, a sandboxed model (Codex workspace-write) cannot write here, and
+# a consumer reads it through `predict status --json` (`denies`), never from a
+# log. Builtins only; it never changes a decision: no state dir → nothing
+# written; any error ignored.
 pp_note_deny() {   # sdir class command-base64
   [ -n "${1:-}" ] && [ -d "$1" ] || return 0
-  { printf '%s\t%s\t%s\n' "$(pp_utc)" "$2" "${3:-}" >> "$1/denies"; } 2>/dev/null || true
+  local ts="" f i r
+  TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || ts=""
+  for i in 1 2 3; do   # one record, one file, created with noclobber: a single writer per file, so a long record is never interleaved
+    f="$1/deny-${ts//[-:]/}-${BASHPID:-$$}-$RANDOM$RANDOM"
+    set -C; printf '%s\t%s\t%s\n' "$ts" "$2" "${3:-}" 2>/dev/null > "$f"; r=$?; set +C
+    [ "$r" -eq 0 ] && break
+  done
+  return 0
 }
 # key=value file helpers (values are single-line)
 pp_kv_get() { [ -r "$1" ] || return 1; sed -n "s/^$2=//p" "$1" | head -1; }
