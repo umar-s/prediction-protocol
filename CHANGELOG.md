@@ -56,9 +56,9 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   concurrent writers of 25 records of 20 000 characters, every command exact;
   `gate_seen` intact beside deny records, non-empty and empty. Lint pins
   each rule — the deny path (both hooks and both libraries the gate sources)
-  whole by sha256 — and seven mutation controls run lint on a mutated copy
-  of the repository, each proven to take effect and each failing lint with
-  the name of the file it changed.
+  whole by sha256 — and six mutations, each run on a copy of the repository
+  whose unmutated form passes lint, each proven to take effect and each
+  failing lint with the name of the file it changed.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -169,16 +169,21 @@ in-memory copy). No check of state can prove code unchanged at run time
 (Required — the snapshot, the text pin and the two greps are gone; both
 libraries are pinned whole by sha256, as the hooks are, and the repository's
 CLAUDE.md names the invariant: any edit of the deny path fails lint until
-re-pinned after `tests/run.sh` passes. Seven mutation controls — the
-unmutated copy passes; an external command in the recorder, a second
+re-pinned after `tests/run.sh` passes. Six mutations beside an unmutated
+baseline that passes — an external command in the recorder, a second
 definition in `classify.sh`, the reviewer's deferred redefinition, an
 `eval`-built `printf`, an external command in the state guard's recorder
 and the reader's flag renamed back each fail lint naming its file — and
 each mutation proves it took effect first: the deferred one shows the
-recorder clean after sourcing and replaced after the call).
+recorder clean after sourcing and replaced after the call). Round 12
+(`9471427`, ready to merge): no finding; one FYI — "seven mutation
+controls" counted the baseline, now worded as six mutations beside it. The
+reviewer's `eval` count of 4 is a word match; the self-check below matches
+the substring, as the ritual's grep does, and finds 6.
 
 ### Supply-chain self-check
-`git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
+`git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped (substring
+match) for
 `curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
 `base64`. `rm -rf` — two hits, both in `tests/run.sh`: a command string the
 tests feed to the gate (never executed), and the lint mutation controls
