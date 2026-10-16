@@ -39,7 +39,7 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 37 controls (216): the record for a gate deny; byte-exact round trips of a
+- 38 controls (217): the record for a gate deny; byte-exact round trips of a
   command with a newline, a tab and quotes and of one ending in `\n\n`; the
   state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
   spread over JSON whitespace; an unparsable input and a deadline overrun
@@ -55,10 +55,10 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   external command on `PATH`; an empty record file counted as `corrupt`; 8
   concurrent writers of 25 records of 20 000 characters, every command exact;
   `gate_seen` intact beside deny records, non-empty and empty. Lint pins
-  each rule — the hook files whole by sha256, `pp_note_deny` by the sha256 of
-  its text and by the definition the gate actually runs after sourcing its
-  libraries — and six mutation controls run lint on a mutated copy of the
-  repository, each failing with its own message.
+  each rule — the deny path (both hooks and both libraries the gate sources)
+  whole by sha256 — and seven mutation controls run lint on a mutated copy
+  of the repository, each proven to take effect and each failing lint with
+  the name of the file it changed.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -160,10 +160,22 @@ sha256 of its text, and compares the definition left after sourcing
 checking that the builtins it runs are still builtins, so a later
 definition, an `eval`, an alias, `enable -n` or a function named `printf`
 fails; a second definition or a builtin-named function in any payload file
-fails by grep; six mutation controls in `tests/run.sh` run lint on a copy —
-unmutated it passes; an external command in the body, a second definition,
-an `eval`-built redefinition, an `eval`-built `printf` and the reader's
-flag renamed back each fail with their own message).
+fails by grep; mutation controls in `tests/run.sh` run lint on a copy).
+Round 11 (`074dc54`, not ready): that snapshot is taken right after
+sourcing, but the gate then calls helpers from the same libraries — a
+`pp_valid_session` that `eval`s a new recorder when called passed lint and
+replaced `pp_note_deny` at run time (the reviewer reproduced it on an
+in-memory copy). No check of state can prove code unchanged at run time
+(Required — the snapshot, the text pin and the two greps are gone; both
+libraries are pinned whole by sha256, as the hooks are, and the repository's
+CLAUDE.md names the invariant: any edit of the deny path fails lint until
+re-pinned after `tests/run.sh` passes. Seven mutation controls — the
+unmutated copy passes; an external command in the recorder, a second
+definition in `classify.sh`, the reviewer's deferred redefinition, an
+`eval`-built `printf`, an external command in the state guard's recorder
+and the reader's flag renamed back each fail lint naming its file — and
+each mutation proves it took effect first: the deferred one shows the
+recorder clean after sourcing and replaced after the call).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
@@ -175,10 +187,11 @@ all in `tests/run.sh`: `ast.literal_eval` in a test helper reading an
 expected Python string literal; the lint mutation controls applying their
 mutation snippet to that copy (one `eval`), and two of those snippets — an
 `eval`-built redefinition the lint must refuse — with their two labels.
-`base64` — nineteen hits, all
+`base64` — twenty hits, all
 the deny record: the gate keeping the parser's encoding, the state guard
 encoding a path (in pure bash since round 5), the reader's comments and grammar, the reference text, the
-tests. No
+tests — one of them a lint mutation control that puts an external `base64`
+into a copy of the state guard, which lint must refuse. No
 network, no credentials. The hooks now create one file per deny in the
 session's own state dir — the only new write.
 

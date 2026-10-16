@@ -372,9 +372,9 @@ check "an unwritable record never changes the decision" 'is_deny'
 PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"
 check "a malformed active value reads as 0 and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"active\"])")" = 0 ]'
 
-echo "# 19 lint holds the recorders and the status reader: each mutation of a copy must fail scripts/lint.sh with its own message"
+echo "# 19 lint holds the deny path and the status reader: each mutation of a copy, proven to take effect, must fail scripts/lint.sh naming its file"
 R="$(cd "$P/../.." && pwd)"
-lintneg() {   # label  expected-message  mutation (a shell snippet over $M, the copy's plugin dir)
+lintneg() {   # label  expected-message  mutation (a shell snippet over $M, the copy's plugin dir; its last command proves the mutation took effect)
   local want="$2" rc
   rm -rf "$T/lintneg"; mkdir -p "$T/lintneg"; tar -C "$R" --exclude=.git -cf - . | tar -C "$T/lintneg" -xf -
   M="$T/lintneg/plugins/prediction-protocol"; eval "$3" || { bad "$1: the mutation did not apply"; return; }
@@ -382,14 +382,25 @@ lintneg() {   # label  expected-message  mutation (a shell snippet over $M, the 
   if [ -z "$want" ]; then check "$1" '[ $rc -eq 0 ]'; else check "$1" '[ $rc -ne 0 ] && grep -qF -- "$want" "$T/lintneg.out"'; fi
 }
 lintneg "the unmutated copy passes lint (the controls below fail for their mutation alone)" "" ":"
-lintneg "an external command in pp_note_deny's body fails its sha256 pin" "pp_note_deny changed" \
+lintneg "an external command in pp_note_deny's body fails the pin of lib/common.sh" "common.sh changed" \
   'sed -i "s/^  local ts=\"\" f i r\$/  local ts=\"\" f i r; : \"\$(date)\"/" "$M/lib/common.sh"; grep -qF ": \"\$(date)\"" "$M/lib/common.sh"'
-lintneg "a second definition in classify.sh (sourced after common.sh) fails the effective-definition check" "is not the pinned text" \
-  'printf "\npp_note_deny() { sleep 30; return 0; }\n" >> "$M/lib/classify.sh"'
-lintneg "an eval-built redefinition, which no grep for the name sees, fails the effective-definition check" "is not the pinned text" \
-  'printf "\neval \"pp_note\"\"_deny() { sleep 30; }\"\n" >> "$M/lib/classify.sh"'
-lintneg "an eval-built function named printf (a builtin the recorder runs) fails as shadowed" "is not the pinned text, or a builtin it runs is shadowed" \
-  'printf "\neval \"pri\"\"ntf() { builtin printf \\\"\\\$@\\\"; }\"\n" >> "$M/lib/common.sh"'
+lintneg "a second definition of the recorder in classify.sh (sourced after common.sh) fails the pin of lib/classify.sh" "classify.sh changed" '
+cat >> "$M/lib/classify.sh" <<"EOF"
+pp_note_deny() { sleep 30; return 0; }
+EOF
+bash -c ". \"\$1\"; . \"\$2\"; declare -f pp_note_deny | grep -q sleep" _ "$M/lib/common.sh" "$M/lib/classify.sh"'
+lintneg "a deferred redefinition — a helper the gate calls later evals a new recorder (round 11's mutation) — fails the pin of lib/common.sh" "common.sh changed" '
+cat >> "$M/lib/common.sh" <<"EOF"
+pp_valid_session() { eval '"'"'pp_note'"'"''"'"'_deny() { : "$(date)"; }'"'"'; [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; }
+EOF
+bash -c ". \"\$1\"; declare -f pp_note_deny | grep -q date && exit 1; pp_valid_session ab && declare -f pp_note_deny | grep -q date" _ "$M/lib/common.sh"'
+lintneg "an eval-built function named printf (a builtin the recorders run) fails the pin of lib/common.sh" "common.sh changed" '
+cat >> "$M/lib/common.sh" <<"EOF"
+eval "pri""ntf() { builtin printf \"\$@\"; }"
+EOF
+bash -c ". \"\$1\"; [ \"\$(type -t printf)\" = function ]" _ "$M/lib/common.sh"'
+lintneg "an external command in the state guard's recorder fails the pin of the hook" "predict-state-guard.sh changed" \
+  'sed -i "s/^  c=\"\$(b64 \"\$1\")\"\$/  c=\"\$(printf %s \"\$1\" | base64 -w0)\"/" "$M/hooks/predict-state-guard.sh"; grep -qF "base64 -w0" "$M/hooks/predict-state-guard.sh"'
 lintneg "the status reader's flag named seen again (gate_seen clobbered) fails lint" "predict status assigns seen more than once" \
   'sed -i "/^cmd_status()/,/^}/s/\bgot=/seen=/" "$M/bin/predict"; grep -q "^    seen=0\$" "$M/bin/predict"'
 

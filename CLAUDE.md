@@ -36,6 +36,12 @@ claude plugin validate plugins/prediction-protocol           # the plugin lives 
   a bash watchdog; no network, no locks in the hook. An irrelevant command
   on a broken gate stays silent — one bug must not lock every project the
   owner opens.
+- **The deny path is pinned whole.** Both hooks and both libraries the gate
+  sources (`lib/common.sh`, `lib/classify.sh`) carry a sha256 in
+  `scripts/lint.sh`: their recorders run builtins only, and no grep or
+  snapshot can hold that against a later redefinition. Any edit fails lint
+  until re-pinned — only after `tests/run.sh` passes on the edited file
+  (a vocabulary change to `classify.sh` included).
 - **The classifier's object is a shell command string**, never a file's
   content (that is ci-gate/migration-guard) and never prose. Two corpora are
   the contract; a new class needs a must-deny line and a must-pass neighbour.

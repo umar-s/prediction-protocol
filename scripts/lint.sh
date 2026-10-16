@@ -32,28 +32,18 @@ grep -qF 'sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"
 grep -qF "printf '%s\\t%s\\t%s\\n' \"\$ts\" gate-error \"\" 2>/dev/null > \"\$f\"" $P/hooks/predict-gate.sh && grep -qF 'd="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-gate.sh || err "deny_literal lost its own gate-error record (every wrapper deny must be recorded, HOME-safe)"
 grep -qF '${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-state-guard.sh || err "the state guard's record must not depend on HOME being set (set -u would end the hook before its deny)"
 # the recorders that run before a deny prints are builtins only: an external process that hung would hold the deny past
-# the platform's timeout. Neither a blacklist of command names (sleep, a second substitution) nor a pin of the first
-# definition of a function (a redefinition replaces it) can hold that, so both hook files are pinned whole: any edit
-# fails here until the pin is updated on purpose, after tests/run.sh's empty-PATH controls pass on the edited hook.
+# the platform's timeout. Neither a blacklist of command names (sleep, a second substitution), nor a pin of a function's
+# text (a redefinition replaces it), nor a snapshot of the definitions after sourcing (code that runs later — a helper the
+# gate calls — can redefine it then) can hold that. So every file the deny path executes is pinned whole: both hooks and
+# the two libraries the gate sources (pp_note_deny lives in common.sh). Any edit fails here until the pin is updated on
+# purpose, after tests/run.sh passes on the edited file (the deny-record and empty-PATH controls among it).
 for pin in "$P/hooks/predict-gate.sh 3368c90c8de634568432e75b5d30dc7b3036468846ffef0bb184f22b15bef367" \
-           "$P/hooks/predict-state-guard.sh 4505206925e7f71e8171ab33cfd72671cae18f34cf1d0ac0979b3b1833968942"; do
+           "$P/hooks/predict-state-guard.sh 4505206925e7f71e8171ab33cfd72671cae18f34cf1d0ac0979b3b1833968942" \
+           "$P/lib/common.sh 078f17e132f618faf73defc12ae57341af0a7bc9369a4f6daa7cf49bb08d6c61" \
+           "$P/lib/classify.sh 463053600459fe19306a213b9d85a8bc007388a39b16a728c41156baa76d8b19"; do
   set -- $pin
-  [ "$({ sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -c1-64)" = "$2" ] || err "$(basename "$1") changed — its recorders must stay builtins only; re-pin its sha256 here only after the empty-PATH controls pass"
+  [ "$({ sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -c1-64)" = "$2" ] || err "$(basename "$1") changed — the deny path's recorders must stay builtins only; re-pin its sha256 here only after tests/run.sh passes"
 done
-# the third recorder, pp_note_deny, lives in the sourced lib/common.sh, which no hook pin covers. Its text is pinned by
-# sha256; the definition the gate actually runs — common.sh and classify.sh sourced, in both of the gate's orders — must
-# be that text, with the builtins it runs still builtins (a later definition, an eval, an alias, `enable -n` or a function
-# named printf replaces it unseen by the text pin); and no payload file defines it a second time or a builtin it runs.
-nd="$(awk '/^pp_note_deny\(\) \{/{p=1} p{print} p&&/^}$/{exit}' $P/lib/common.sh)"
-[ "$(printf '%s\n' "$nd" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-64)" = 683c7016b2c8afd1129b68c821f76a9cb95fd46f801b8507540355d8946717c8 ] || err "pp_note_deny changed — its recorder must stay builtins only; re-pin its sha256 here only after the deny-record controls pass"
-nd_want="$(bash --norc --noprofile -c "$nd"$'\n''declare -f pp_note_deny' 2>/dev/null)"
-for order in "common classify" "classify common"; do
-  set -- $order
-  nd_have="$(bash --norc --noprofile -c '. "$1"; . "$2"; declare -f pp_note_deny; for b in printf set local return break [; do [ "$(type -t "$b")" = builtin ] || echo "shadowed: $b"; done' _ "$P/lib/$1.sh" "$P/lib/$2.sh" 2>/dev/null)"
-  [ -n "$nd_want" ] && [ "$nd_have" = "$nd_want" ] || err "the pp_note_deny the gate runs (lib/$1.sh, then lib/$2.sh) is not the pinned text, or a builtin it runs is shadowed"
-done
-[ "$(cat $P/lib/*.sh $P/hooks/*.sh $P/bin/predict | grep -cE 'pp_note_deny[[:space:]]*\(\)|function[[:space:]]+pp_note_deny')" -eq 1 ] || err "pp_note_deny is defined more than once (a later definition replaces the pinned one)"
-grep -nE '(^|[;{[:space:]])(function[[:space:]]+)?(printf|set|local|return|break|\[)[[:space:]]*\(\)|(^|[;&|[:space:]])enable[[:space:]]' $P/lib/*.sh $P/hooks/*.sh $P/bin/predict >/dev/null && err "a payload file defines or disables a builtin the recorders run"
 for f in "$P/hooks/predict-gate.sh" "$P/hooks/predict-state-guard.sh"; do grep -qF "TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1" "$f" || err "$(basename "$f") lost the builtin UTC timestamp"; done
 grep -q "^IFS= read -r -d '' input || true" $P/hooks/predict-state-guard.sh && ! grep -qF '$(cat)' $P/hooks/predict-state-guard.sh || err "the state guard must read stdin with the builtin read, not cat"
 grep -q '^  note "$1"$' $P/hooks/predict-state-guard.sh && grep -q 'state-guard' $P/hooks/predict-state-guard.sh || err "state guard lost the deny record"
