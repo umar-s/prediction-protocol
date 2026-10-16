@@ -38,9 +38,11 @@ probe_claude() {
   expect() { # mode expected-substring
     echo "$1" > .claude/MODE
     local out; out="$(timeout 120 claude -p "$PROMPT" --model "${PROBE_MODEL:-claude-haiku-4-5-20251001}" --allowedTools Bash 2>&1 | tail -1)"
-    if printf '%s' "$out" | grep -q "$2"; then echo "ok    $1 → $out"; else echo "FAIL  $1 → $out (expected *$2*)"; fail=1; fi
+    if printf '%s' "$out" | grep -qE "$2"; then echo "ok    $1 → $out"; else echo "FAIL  $1 → $out (expected *$2*)"; fail=1; fi
   }
-  expect deny BLOCKED; expect ask BLOCKED; expect exit2 BLOCKED
+  # a blocked ask reaches the model with the hook's reason; it may quote that (PROBE-ASK) instead of saying BLOCKED —
+  # either way the command did not run (no PROBE-OK-42), which is the fact this row checks
+  expect deny BLOCKED; expect ask 'BLOCKED|PROBE-ASK'; expect exit2 BLOCKED
   expect exit1 PROBE-OK-42; expect badjson PROBE-OK-42; expect sleep PROBE-OK-42
   # the mode signal: permission_mode arrives as set for dontAsk (auto mode reads default here and is read from the transcript instead)
   echo log > .claude/MODE; timeout 120 claude -p "$PROMPT" --permission-mode dontAsk --model "${PROBE_MODEL:-claude-haiku-4-5-20251001}" --allowedTools Bash >/dev/null 2>&1

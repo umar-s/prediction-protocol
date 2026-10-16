@@ -83,10 +83,13 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   1.1.0 — deny and exit 2 block, ask/exit 1/broken JSON/timeout run the
   command, under the protocol without a receipt denied with the recipe,
   with a receipt passed silently, `apply_patch` into the state denied.
-  `tests/platform-probe.sh` (Claude Code 2.1.301, haiku): deny, exit 2 and
-  the fail-open rows reproduced; the `ask` row's answer was displaced by a
-  memory plugin's notice in the probe session (environmental — the ask path
-  is unchanged since 1.1.0, where it was verified).
+  `tests/platform-probe.sh` (Claude Code 2.1.301, haiku): every row — deny,
+  ask and exit 2 block, the fail-open rows run, `dontAsk` arrives on stdin.
+  The `ask` row's check was the model's word: a blocked ask reaches the model
+  with the hook's reason, and one run quoted that (`PROBE-ASK`) instead of
+  `BLOCKED` while the command did not run. The probe now accepts either
+  (`tests/platform-probe.sh`); an earlier run's miss on that row, put down to
+  a memory plugin's notice, was most likely the same.
 - Live through Codex CLI 0.162.1 (`codex exec -s read-only`, the dev hooks
   trusted by hash in an isolated `CODEX_HOME`): `git push --force` under the
   protocol without a receipt was denied and `predict status --json` listed
