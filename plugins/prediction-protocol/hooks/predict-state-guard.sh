@@ -16,7 +16,7 @@ input="$(cat)" || exit 0
 # Session as the gate keys it: a runner's PP_SESSION, else the platform's stdin id; never fatal.
 note() {
   local s="${PP_SESSION:-}" d
-  if [ -z "$s" ] && [[ "$input" =~ \"session_id\":\ ?\"([^\"]*)\" ]]; then s="${BASH_REMATCH[1]}"; fi
+  if [ -z "$s" ] && [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then s="${BASH_REMATCH[1]}"; fi   # any JSON whitespace around the colon
   [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || return 0
   d="${PP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/prediction-protocol}/sessions/$s"
   [ -d "$d" ] || return 0
@@ -29,13 +29,14 @@ deny() {
   exit 2
 }
 is_state() { case "$1" in *prediction-protocol/sessions/*|*"${PP_STATE_DIR:-/nonexistent-state-root}/sessions/"*) return 0 ;; esac; return 1; }
-re='"(file_path|notebook_path)":"([^"]*)"'
+re='"(file_path|notebook_path)"[[:space:]]*:[[:space:]]*"([^"]*)"'   # any JSON whitespace around the colon
 rest="$input"
 while [[ "$rest" =~ $re ]]; do
   p="${BASH_REMATCH[2]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
   is_state "$p" && deny "$p"
 done
-case "$input" in *'"tool_name":"apply_patch"'*|*'"tool_name": "apply_patch"'*)
+ap_re='"tool_name"[[:space:]]*:[[:space:]]*"apply_patch"'
+if [[ "$input" =~ $ap_re ]]; then
   # a header starts a line of the patch: in the JSON text that is a literal backslash-n (or the opening quote) before the stars;
   # a content line carries its own leading +/-/space, so a header-shaped line inside the content never matches
   re='(\\n|")\*\*\* (Add File|Update File|Delete File|Move to): ([^"\\]*)'
@@ -43,6 +44,6 @@ case "$input" in *'"tool_name":"apply_patch"'*|*'"tool_name": "apply_patch"'*)
   while [[ "$rest" =~ $re ]]; do
     p="${BASH_REMATCH[3]}"; rest="${rest#*"${BASH_REMATCH[0]}"}"
     is_state "${p%"${p##*[![:space:]]}"}" && deny "${p%"${p##*[![:space:]]}"}"
-  done ;;
-esac
+  done
+fi
 exit 0

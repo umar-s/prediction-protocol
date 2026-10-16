@@ -50,14 +50,16 @@ pp_json_str() {
 }
 pp_session_dir() { printf '%s/sessions/%s' "$PP_STATE_ROOT" "$1"; }
 # The deny record: one line per deny the hooks issue for a session that has a
-# state dir — utc, class, base64 of the exact command (base64: a command with
-# newlines or tabs stays one record). The hooks run outside any sandbox, a
-# sandboxed model (Codex workspace-write) cannot write here, and a consumer
-# reads it through `predict status --json` (`denies`), never from a log. It
-# never changes a decision: no state dir → nothing written; any error ignored.
-pp_note_deny() {   # sdir class command
+# state dir — utc, class, base64 of the exact command as it arrived (the
+# parser's own encoding, never decoded and re-encoded: a shell decode drops
+# trailing newlines; base64 keeps a command with newlines or tabs one record).
+# The hooks run outside any sandbox, a sandboxed model (Codex workspace-write)
+# cannot write here, and a consumer reads it through `predict status --json`
+# (`denies`), never from a log. It never changes a decision: no state dir →
+# nothing written; any error ignored.
+pp_note_deny() {   # sdir class command-base64
   [ -n "${1:-}" ] && [ -d "$1" ] || return 0
-  { printf '%s\t%s\t%s\n' "$(pp_utc)" "$2" "$(printf '%s' "$3" | base64 | tr -d '\n')" >> "$1/denies"; } 2>/dev/null || true
+  { printf '%s\t%s\t%s\n' "$(pp_utc)" "$2" "${3:-}" >> "$1/denies"; } 2>/dev/null || true
 }
 # key=value file helpers (values are single-line)
 pp_kv_get() { [ -r "$1" ] || return 1; sed -n "s/^$2=//p" "$1" | head -1; }

@@ -86,9 +86,13 @@ and leaves every deny in place. No mode flag is exchanged between plugins.
   registration.
 - A deny record: every deny the gate or the state guard issues for a
   session whose state dir exists appends one line to `denies` there (utc,
-  class, base64 of the exact command — or `state-guard` and the refused
-  path, or `gate-error` from the wrapper with `PP_SESSION` set), and
-  `predict status --json` returns them as `denies`. A deny leaves no trace
+  class, and the command's base64 exactly as the stdin parser produced it —
+  a shell decode would drop trailing newlines; or `state-guard` and the
+  refused path; or `gate-error` from the wrapper, and `unclassified` for an
+  input that never parsed, both keyed by a runner's `PP_SESSION`).
+  `predict status --json` returns them as `denies`: `[{ts, class,
+  command_b64}]` — base64 keeps the bytes exact and the JSON pure ASCII; a
+  line not in that shape counts as class `corrupt`. A deny leaves no trace
   in the platform's own output that a consumer can rely on — on Codex it is
   absent from `codex exec --json` and only in a log whose framing a command
   can imitate — so a loop's `gate_denies` comes from here. The hooks run

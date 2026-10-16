@@ -150,15 +150,21 @@ cmd_status() {
   seen="$(cat "$SDIR/hook-seen" 2>/dev/null || echo never)"
   for d in "$SDIR"/receipts/*/; do [ -d "$d" ] || continue; [ -e "$d/closed" ] && continue; if [ -e "$d/consumed" ]; then inflight=$((inflight+1)); else open=$((open+1)); fi; done
   [[ "${active:-0}" =~ ^[01]$ ]] || active=0   # anything but 1 is "not active" — and the JSON stays JSON
-  # the hooks' deny record (pp_note_deny): one object per deny, the command decoded; an
-  # undecodable line still counts, with an empty command — a deny is never dropped here
-  local denies="" dn=0 ts cls b64 dc
+  # the hooks' deny record (pp_note_deny): one object per physical line — a deny is never
+  # dropped here. The command stays base64 (`command_b64`): its exact bytes, trailing
+  # newlines included, and pure ASCII, so the JSON is valid whatever the file holds. A line
+  # that is not `utc<TAB>class<TAB>base64` is counted as class `corrupt`, fields emptied.
+  local denies="" dn=0 line ts rest cls b64 tab=$'\t'
   if [ -r "$SDIR/denies" ]; then
-    while IFS=$'\t' read -r ts cls b64 || [ -n "${ts:-}" ]; do
-      [ -n "${ts:-}${cls:-}${b64:-}" ] || continue
-      dc="$(printf '%s' "${b64:-}" | base64 -d 2>/dev/null)" || dc=""
+    while IFS= read -r line || [ -n "$line" ]; do
+      ts="" cls="corrupt" b64=""
+      if [[ "$line" == *"$tab"*"$tab"* ]]; then
+        ts="${line%%"$tab"*}"; rest="${line#*"$tab"}"; cls="${rest%%"$tab"*}"; b64="${rest#*"$tab"}"
+        [[ "$ts" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ && "$cls" =~ ^[a-z][a-z0-9-]{0,63}$ && "$b64" =~ ^[A-Za-z0-9+/]*={0,2}$ ]] \
+          || { ts="" cls="corrupt" b64=""; }
+      fi
       [ "$dn" -eq 0 ] || denies="$denies,"
-      denies="$denies{\"ts\":$(pp_json_str "${ts:-}"),\"class\":$(pp_json_str "${cls:-}"),\"command\":$(pp_json_str "$dc")}"
+      denies="$denies{\"ts\":\"$ts\",\"class\":\"$cls\",\"command_b64\":\"$b64\"}"
       dn=$((dn+1))
     done < "$SDIR/denies"
   fi

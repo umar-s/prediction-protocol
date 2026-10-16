@@ -15,28 +15,39 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
 
 ### Added
 - Every deny the gate or the state guard issues for a session whose state
-  dir exists appends one line to `denies` in that dir: utc, class, base64 of
-  the exact command (one record however many newlines or tabs it holds); the
-  state guard writes `state-guard` and the refused path; the outer wrapper
-  writes `gate-error` with an unknown command when the gate overruns its
-  deadline or fails, keyed by a runner's `PP_SESSION`. The hooks run outside
-  any sandbox; a Codex model in `workspace-write` cannot write the state
-  (observed). `pp_note_deny` is best-effort and decision-neutral — an
-  unwritable record never changes a deny (control).
+  dir exists appends one line to `denies` in that dir: utc, class, and the
+  command's base64 **as the stdin parser produced it** (never decoded and
+  re-encoded: a shell decode drops trailing newlines); the state guard writes
+  `state-guard` and the refused path; the outer wrapper writes `gate-error`
+  when the gate overruns its deadline or fails, and an input that never
+  parsed is recorded as `unclassified` — both keyed by a runner's
+  `PP_SESSION`, which the gate now resolves before it reads stdin. The hooks
+  run outside any sandbox; a Codex model in `workspace-write` cannot write
+  the state (observed). `pp_note_deny` is best-effort and decision-neutral —
+  an unwritable record never changes a deny (control).
 - `predict status --json` returns them as `denies` — `[{ts, class,
-  command}]`, the command decoded; an undecodable line still counts, with an
-  empty command (a deny is never dropped by the reader). The text status
-  prints `denies=N`.
+  command_b64}]`: the command's exact bytes, and pure ASCII, so the JSON is
+  valid whatever the file holds. The reader takes physical lines and splits
+  on tabs itself; a line not in the shape `utc<TAB>class<TAB>base64` counts
+  as class `corrupt` with its fields emptied — a deny is never dropped. The
+  text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 10 controls (189): the record for a gate deny, byte-exact round trip of a
-  command with a newline, a tab and quotes, the state guard by `PP_SESSION`
-  and by the stdin session id, the wrapper's `gate-error` on a deadline
-  overrun, nothing written outside the protocol, an undecodable line kept,
-  an unwritable record leaving the deny intact, a malformed `active` value.
-  Lint pins each rule.
+- 14 controls (193): the record for a gate deny; byte-exact round trips of a
+  command with a newline, a tab and quotes and of one ending in `\n\n`; the
+  state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
+  spread over JSON whitespace; an unparsable input and a deadline overrun
+  recorded under `PP_SESSION`; nothing written outside the protocol; damaged
+  lines (tabs only, invalid UTF-8, bad base64, no tabs) counted as `corrupt` with the
+  JSON intact; an unwritable record leaving the deny intact; a malformed
+  `active` value; a pretty-printed `apply_patch` refused. Lint pins each rule.
 
 ### Fixed
+- The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
+  only in compact JSON: a harness that put whitespace around the colon would
+  have walked an edit of the protocol's state past it. It now accepts any
+  JSON whitespace there (Claude Code and Codex 0.162.1 send compact JSON, so
+  no observed run was affected).
 - `predict status --json` printed the raw `active` value; anything but `0`
   or `1` (a hand-edited state) made the output invalid JSON. It now reads as
   `0` — not active.
@@ -45,18 +56,30 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
 - Live through Codex CLI 0.162.1 (`codex exec -s read-only`, the dev hooks
   trusted by hash in an isolated `CODEX_HOME`): `git push --force` under the
   protocol without a receipt was denied and `predict status --json` listed
-  `{"class": "vcs-force", "command": "git push --force origin main"}`.
-  `hooks.json` is unchanged — the Codex trust hashes of 1.1.0 still hold.
+  the deny with its class `vcs-force` and the exact command. `hooks.json` is
+  unchanged — the Codex trust hashes of 1.1.0 still hold.
+
+### Review record
+Cross-reviewed by Codex through task-flow's `xreview.sh`. Round 1
+(`4960708`, not ready): the reader and the gate's decode dropped trailing
+newlines; tab-only lines were skipped and invalid UTF-8 broke the JSON; a
+deny before stdin was parsed was not recorded though `PP_SESSION` was known;
+the state guard's session regex took at most one space — all Required, all
+fixed (the record keeps the parser's base64, `command_b64`, a tab-splitting
+reader with `corrupt`, the early session dir, JSON whitespace in the guard,
+which also exposed the compact-only path match above). The FYI on the
+reader's cost is met by the single pass without per-field escaping.
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
 `curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
-`base64`. `rm -rf` — one hit, a test fixture command string fed to the gate
-(never executed). `base64` — six hits, all the deny record: encoding the
-command into one line (`common.sh`, the state guard), decoding it in
-`predict status`, the reference text, and a test's undecodable line. No
-network, no credentials, no `eval`. The hooks now append to a file in the
-session's own state dir — the only new write.
+`base64`. `rm -rf` — one hit, a command string the tests feed to the gate
+(never executed). `eval` — one hit, `ast.literal_eval` in a test helper
+reading an expected Python string literal. `base64` — fourteen hits, all
+the deny record: the gate keeping the parser's encoding, the state guard
+encoding a path, the reader's comments, the reference text, the tests. No
+network, no credentials. The hooks now append to a file in the session's
+own state dir — the only new write.
 
 ## [1.1.0] — 2026-10-15
 

@@ -62,7 +62,7 @@ fi
 . "$here/../lib/classify.sh"
 predict="\"$PLUGIN_ROOT/bin/predict\""
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":%s}}\n' "$1" "$(pp_json_str "$2")"; }
-deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${command:-}"; emit deny "prediction-protocol v$PP_VERSION: $1"; printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2; exit 2; }
+deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${cmd_b64:-}"; emit deny "prediction-protocol v$PP_VERSION: $1"; printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2; exit 2; }
 ask()  {   # Claude Code: the permission prompt carries the reason. Codex: no hook ask exists — deny, and say why
   [ "${harness:-claude}" = claude ] || deny "$1 — this harness cannot ask: Codex has no PreToolUse ask (a hook that asks is marked failed and the command runs), so the gate denies instead. Either run the command yourself from a plain shell, or put the session under the protocol and open a receipt for it — then the receipt is the witness and the gate passes it silently."
   emit ask "prediction-protocol v$PP_VERSION: $1"; exit 0
@@ -79,6 +79,8 @@ on_err() {
 }
 trap on_err ERR
 
+# a runner's session is known before stdin is parsed, so even an early deny (unparsable input) is recorded
+sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"; then sdir="$(pp_session_dir "$PP_SESSION")"; fi
 input="$(cat)"
 parse_py() { python3 -c '
 import json,sys,base64
@@ -105,7 +107,8 @@ tool_name="$(printf '%s\n' "$fields" | sed -n 3p)"
 tool_use_id="$(printf '%s\n' "$fields" | sed -n 4p)"
 permission_mode="$(printf '%s\n' "$fields" | sed -n 5p)"
 transcript_path="$(printf '%s\n' "$fields" | sed -n 6p)"
-command="$(printf '%s\n' "$fields" | sed -n 7p | base64 -d 2>/dev/null)" || command=""
+cmd_b64="$(printf '%s\n' "$fields" | sed -n 7p)"   # the command's exact bytes, for the deny record (a decode below drops trailing newlines)
+command="$(printf '%s\n' "$cmd_b64" | base64 -d 2>/dev/null)" || command=""
 codex_marker="$(printf '%s\n' "$fields" | sed -n 8p)"   # turn_id / model: Codex serialises them, Claude Code does not
 harness="$(pp_harness "$codex_marker")"
 [ "$tool_name" = "Bash" ] || pass
