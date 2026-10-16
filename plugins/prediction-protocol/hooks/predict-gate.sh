@@ -29,14 +29,16 @@ PP_VERSION=unknown
 
 # literal deny: plain ASCII only, no helpers, no sourced files. It records itself first
 # (gate-error, command unknown) under a runner's PP_SESSION: every wrapper deny happens
-# before or without the libraries, so the record is inlined — builtins and date only,
-# best-effort, never fatal (${HOME:-}: an unset variable under set -u must not end the
-# hook before its deny is printed).
+# before or without the libraries, so the record is inlined, and in builtins only — the
+# wrapper's watchdog has already ended here, so an external process that hung would hold
+# the deny past the platform's timeout. Best-effort, never fatal (${HOME:-}: an unset
+# variable under set -u must not end the hook before its deny is printed). bash >= 4.2.
 deny_literal() {
-  local s="${PP_SESSION:-}" d
+  local s="${PP_SESSION:-}" d ts=""
   if [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
     d="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"
-    if [ -d "$d" ]; then { printf '%s\tgate-error\t\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$d/denies"; } 2>/dev/null || true; fi
+    TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || ts=""
+    if [ -d "$d" ]; then { printf '%s\tgate-error\t\n' "$ts" >> "$d/denies"; } 2>/dev/null || true; fi
   fi
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"prediction-protocol v%s: %s"}}\n' "$PP_VERSION" "$1"
   printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2

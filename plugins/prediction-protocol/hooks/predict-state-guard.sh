@@ -11,16 +11,31 @@
 # content: a document that *mentions* the state directory, even in a line that
 # looks like a header, is not an edit of it. Exit 0 with no output otherwise.
 set -u; export LC_ALL=C
-input="$(cat)" || exit 0
-# the deny record (lib/common.sh pp_note_deny), inlined: this hook stays minimal and sources nothing.
-# Session as the gate keys it: a runner's PP_SESSION, else the platform's stdin id; never fatal.
+IFS= read -r -d '' input || true   # builtin: the hook must not depend on an external process to see its input
+# the deny record (lib/common.sh pp_note_deny), inlined: this hook stays minimal and sources nothing,
+# and runs no external process before its deny prints — one that hung would let the hook's timeout
+# pass the edit. Session as the gate keys it: a runner's PP_SESSION, else the platform's stdin id.
+b64() {   # base64 of $1 in pure bash (LC_ALL=C: one character is one byte)
+  local s="$1" t='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/' o="" i a b c n len=${#1}
+  for ((i = 0; i < len; i += 3)); do
+    printf -v a '%d' "'${s:i:1}"; b=0; c=0
+    ((i + 1 < len)) && printf -v b '%d' "'${s:i+1:1}"
+    ((i + 2 < len)) && printf -v c '%d' "'${s:i+2:1}"
+    n=$(( ((a & 255) << 16) | ((b & 255) << 8) | (c & 255) ))
+    o+="${t:n>>18&63:1}${t:n>>12&63:1}"
+    if ((i + 1 < len)); then o+="${t:n>>6&63:1}"; else o+="="; fi
+    if ((i + 2 < len)); then o+="${t:n&63:1}"; else o+="="; fi
+  done
+  printf '%s' "$o"
+}
 note() {
-  local s="${PP_SESSION:-}" d
+  local s="${PP_SESSION:-}" d ts=""
   if [ -z "$s" ] && [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then s="${BASH_REMATCH[1]}"; fi   # any JSON whitespace around the colon
   [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || return 0
   d="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"   # ${HOME:-}: set -u must not end the hook before its deny
   [ -d "$d" ] || return 0
-  { printf '%s\tstate-guard\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s' "$1" | base64 | tr -d '\n')" >> "$d/denies"; } 2>/dev/null || true
+  TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || ts=""
+  { printf '%s\tstate-guard\t%s\n' "$ts" "$(b64 "$1")" >> "$d/denies"; } 2>/dev/null || true
 }
 deny() {
   note "$1"

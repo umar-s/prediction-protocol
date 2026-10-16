@@ -344,10 +344,15 @@ check "a wrapper deny before the libraries load (common.sh missing) is recorded 
 rm "$T/nolib3/lib/classify.sh"
 OUT="$(stdin dr-3 'ls' | PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?; dis dr-3 1 gate-error "''"; r=$?
 check "classify.sh missing: even ls is denied, and the deny is recorded" 'is_deny && [ $r -eq 0 ]'
-OUT="$(stdin dr-3 'git push --force origin main' | env -u HOME PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?
-check "HOME unset: the wrapper's literal deny still prints and exits 2" 'is_deny'
-OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/dr-3/state"}}' "$PP_STATE_DIR" | env -u HOME PP_SESSION="dr-3" bash "$guard" 2>/dev/null)"; GRC=$?
-check "HOME unset: the state guard still denies and records (its record never ends the hook first)" 'is_deny && [ "$(dn dr-3)" = 4 ]'
+OUT="$(stdin dr-3 'git push --force origin main' | env -u HOME -u PP_STATE_DIR -u XDG_STATE_HOME PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?
+check "HOME, PP_STATE_DIR, XDG_STATE_HOME all unset: the wrapper's literal deny still prints and exits 2 (set -u never ends it first)" 'is_deny'
+OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/x/.local/state/prediction-protocol/sessions/dr-3/state"}}' | env -u HOME -u PP_STATE_DIR -u XDG_STATE_HOME PP_SESSION="dr-3" bash "$guard" 2>/dev/null)"; GRC=$?
+check "HOME, PP_STATE_DIR, XDG_STATE_HOME all unset: the state guard still denies" 'is_deny && [ "$(dn dr-3)" = 2 ]'
+BASH_BIN="$(command -v bash)"
+OUT="$(stdin dr-3 'git push --force origin main' | PATH=/nonexistent PP_SESSION="dr-3" "$BASH_BIN" "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?; dis dr-3 2 gate-error "''"; r=$?
+check "no external command on PATH (no cat, no date): the wrapper still denies and records a well-formed gate-error" 'is_deny && [ $r -eq 0 ]'
+OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/dr-3/state"}}' "$PP_STATE_DIR" | PATH=/nonexistent PP_SESSION="dr-3" "$BASH_BIN" "$guard" 2>/dev/null)"; GRC=$?; dis dr-3 3 state-guard "'$PP_STATE_DIR/sessions/dr-3/state'"; r=$?
+check "no external command on PATH (no cat, date, base64, tr): the state guard still denies and records the exact path" 'is_deny && [ $r -eq 0 ]'
 chmod 000 "$PP_STATE_DIR/sessions/dr-1/denies"; PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; chmod 644 "$PP_STATE_DIR/sessions/dr-1/denies"
 check "an unwritable record never changes the decision" 'is_deny'
 PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"

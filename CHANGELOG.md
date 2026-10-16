@@ -25,7 +25,8 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   `unclassified` — both keyed by a runner's
   `PP_SESSION`, which the gate now resolves before it reads stdin. The hooks
   run outside any sandbox; a Codex model in `workspace-write` cannot write
-  the state (observed). `pp_note_deny` is best-effort and decision-neutral —
+  the state (observed). The wrapper's and the state guard's recorders run
+  builtins only (bash >= 4.2). `pp_note_deny` is best-effort and decision-neutral —
   an unwritable record never changes a deny (control).
 - `predict status --json` returns them as `denies` — `[{ts, class,
   command_b64}]`: the command's exact bytes, and pure ASCII, so the JSON is
@@ -35,7 +36,7 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 25 controls (204): the record for a gate deny; byte-exact round trips of a
+- 27 controls (206): the record for a gate deny; byte-exact round trips of a
   command with a newline, a tab and quotes and of one ending in `\n\n`; the
   state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
   spread over JSON whitespace; an unparsable input and a deadline overrun
@@ -46,8 +47,9 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   a NUL inside the base64 and base64 outside the full grammar (`A`, `=`,
   `A==`, `YQ`) counted as `corrupt`; a wrapper deny before the libraries
   load (common.sh missing, classify.sh missing — then even `ls`) recorded as
-  `gate-error`; the gate's literal deny and the state guard deny with `HOME`
-  unset. Lint pins each rule.
+  `gate-error`; the gate's literal deny and the state guard deny with `HOME`,
+  `PP_STATE_DIR` and `XDG_STATE_HOME` unset; both deny and record with no
+  external command on `PATH`. Lint pins each rule.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -104,16 +106,25 @@ Round 4 (`c0b1d5c`, not ready): the wrapper's literal denies before the
 libraries load were not recorded (Required — `deny_literal` records itself,
 inlined, under `PP_SESSION`; the same pass found that an unset `HOME` under
 `set -u` would have ended the state guard's new record before its deny
-printed — both recorders now use `${HOME:-}`, with controls).
+printed — both recorders now use `${HOME:-}`, with controls). Round 5
+(`33a847c`, not ready): `deny_literal` ran an external `date` after the
+watchdog had ended, and the state guard ran `date`, `base64` and `tr` (and
+read stdin with `cat`) before its deny printed — a hung external process
+would have let the platform's timeout pass the call, and a missing one
+would have left a corrupt record (Required — both recorders are builtins
+only: `printf '%(…)T'` for the time, a pure-bash base64 in the guard,
+`read -d ''` for its stdin; bash >= 4.2); the HOME controls left
+`PP_STATE_DIR` set, so `$HOME` was never evaluated (Required — they unset
+all three; controls with an empty `PATH`).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
 `curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
 `base64`. `rm -rf` — one hit, a command string the tests feed to the gate
 (never executed). `eval` — one hit, `ast.literal_eval` in a test helper
-reading an expected Python string literal. `base64` — sixteen hits, all
+reading an expected Python string literal. `base64` — seventeen hits, all
 the deny record: the gate keeping the parser's encoding, the state guard
-encoding a path, the reader's comments and grammar, the reference text, the
+encoding a path (in pure bash since round 5), the reader's comments and grammar, the reference text, the
 tests. No
 network, no credentials. The hooks now append to a file in the session's
 own state dir — the only new write.
