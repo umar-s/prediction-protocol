@@ -107,7 +107,11 @@ and leaves every deny in place. No mode flag is exchanged between plugins.
   Codex the sandbox refuses the write anyway (the state is outside
   `workspace-write`), and an unsandboxed Claude shell can write the state
   directly. Claude Code and Codex 0.162.1 serialise `tool_input` without
-  escaping `/` or non-ASCII. A JSON parse plus `realpath` is a candidate.
+  escaping `/` or non-ASCII. The reasoning holds while its premises do:
+  the state root is outside every writable root of the model's sandbox (no
+  extra writable root over it, no `PP_STATE_DIR` under the workspace or
+  `/tmp`) — a consumer that runs a Codex executor keeps them (loop-foundry
+  `harnesses.md`). A JSON parse plus `realpath` is a candidate.
 - The version is in every reason; the platform table above is re-verified
   with `tests/platform-probe.sh` before a release.
 - `PostToolUse` cannot block or undo — grading lives in the CLI, not in a

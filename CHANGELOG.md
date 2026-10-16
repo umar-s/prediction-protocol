@@ -83,16 +83,20 @@ reader's cost is met by the single pass without per-field escaping. Round 2
 deny and a NUL inside the base64 was silently repaired; the base64 check
 took the alphabet, not the grammar — both Required, fixed (bytes a record
 never holds become \001 before the shell reads them, so the line is
-`corrupt`; the full base64 grammar).
+`corrupt`; the full base64 grammar). Round 3 (`43af71a`, not ready): the two
+new reader rules had controls but no lint pins (Required — pinned, each pin
+shown to fail when its rule is removed); the self-check's base64 count was
+stale (Nit — 16); the state guard note now names its premises (FYI).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
 `curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
 `base64`. `rm -rf` — one hit, a command string the tests feed to the gate
 (never executed). `eval` — one hit, `ast.literal_eval` in a test helper
-reading an expected Python string literal. `base64` — fourteen hits, all
+reading an expected Python string literal. `base64` — sixteen hits, all
 the deny record: the gate keeping the parser's encoding, the state guard
-encoding a path, the reader's comments, the reference text, the tests. No
+encoding a path, the reader's comments and grammar, the reference text, the
+tests. No
 network, no credentials. The hooks now append to a file in the session's
 own state dir — the only new write.
 

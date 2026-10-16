@@ -33,6 +33,8 @@ grep -qF 'sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"
 grep -q '^  note "$1"$' $P/hooks/predict-state-guard.sh && grep -q 'state-guard' $P/hooks/predict-state-guard.sh || err "state guard lost the deny record"
 grep -q 'never changes a decision' $P/lib/common.sh && grep -q '2>/dev/null || true' $P/lib/common.sh || err "pp_note_deny must stay best-effort and decision-neutral"
 grep -q '"denies":\[%s\]' $P/bin/predict && grep -q 'command_b64' $P/bin/predict && grep -q 'counted as class `corrupt`' $P/bin/predict || err "predict status lost the denies list"
+grep -qF "tr '\000-\010\013-\037\177-\377' '[\001*]' < \"\$SDIR/denies\"" $P/bin/predict || err "the status reader lost the byte mapping (NUL and foreign bytes must become a corrupt line, never vanish)"
+grep -qF "([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?\$'" $P/bin/predict && grep -q '"\$b64" =~ \$b64re' $P/bin/predict || err "the status reader lost the full base64 grammar"
 grep -q 'pp_delegated "$permission_mode" "$transcript_path"' $P/hooks/predict-gate.sh && [ "$(grep -c '\[ "$delegated" = 0 \] || pass' $P/hooks/predict-gate.sh)" -eq 2 ] || err "gate lost the delegated-session rule (auto mode must not ask; both ask sites)"
 grep -q 'auto|dontAsk|bypassPermissions' $P/lib/common.sh && grep -q '"permissionMode":"' $P/lib/common.sh || err "pp_delegated lost a mode or the transcript marker"
 # the second harness: Codex has no hook ask — deny where Claude Code asks, silent pass with a receipt, apply_patch guarded, context instead of env file
