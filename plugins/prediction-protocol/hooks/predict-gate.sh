@@ -27,8 +27,17 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$here/.." && pwd)}"
 PP_VERSION=unknown
 
-# literal deny: plain ASCII only, no helpers, no sourced files
+# literal deny: plain ASCII only, no helpers, no sourced files. It records itself first
+# (gate-error, command unknown) under a runner's PP_SESSION: every wrapper deny happens
+# before or without the libraries, so the record is inlined — builtins and date only,
+# best-effort, never fatal (${HOME:-}: an unset variable under set -u must not end the
+# hook before its deny is printed).
 deny_literal() {
+  local s="${PP_SESSION:-}" d
+  if [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
+    d="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"
+    if [ -d "$d" ]; then { printf '%s\tgate-error\t\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$d/denies"; } 2>/dev/null || true; fi
+  fi
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"prediction-protocol v%s: %s"}}\n' "$PP_VERSION" "$1"
   printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2
   exit 2
@@ -44,16 +53,14 @@ if [ "${1:-}" != "--inner" ]; then
   pp_prefilter "$input" || pp_prefilter_also "$input" || exit 0
   [ -r "$here/../lib/common.sh" ] || deny_literal "lib/common.sh is missing: broken install (failing closed)"
   . "$here/../lib/common.sh" || deny_literal "lib/common.sh failed to load (failing closed)"
-  # where a deny of the wrapper itself is recorded: only a runner's PP_SESSION — stdin is not parsed out here
-  osdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"; then osdir="$(pp_session_dir "$PP_SESSION")"; fi
   errf="$(mktemp "${TMPDIR:-/tmp}/pp-gate-err.XXXXXX" 2>/dev/null)" || errf=/dev/null
   if out="$(printf '%s' "$input" | pp_with_deadline "${PP_DEADLINE:-9}" bash "${BASH_SOURCE[0]}" --inner 2>"$errf")"; then rc=0; else rc=$?; fi
   err=""; [ "$errf" != /dev/null ] && { err="$(head -c 600 "$errf" 2>/dev/null || true)"; rm -f "$errf"; }
   case "$rc" in
     0) printf '%s' "$out"; [ -n "$out" ] && printf '\n'; exit 0 ;;
     2) printf '%s' "$out"; [ -n "$out" ] && printf '\n'; printf '%s\n' "$err" >&2; exit 2 ;;
-    124|137|143) pp_note_deny "$osdir" gate-error ""; deny_literal "the gate exceeded its deadline on a command that carries a one-way token (failing closed). ${err//[^ -~]/ }" ;;
-    *) pp_note_deny "$osdir" gate-error ""; deny_literal "gate error rc=$rc (failing closed). ${err//[^ -~]/ }" ;;
+    124|137|143) deny_literal "the gate exceeded its deadline on a command that carries a one-way token (failing closed). ${err//[^ -~]/ }" ;;
+    *) deny_literal "gate error rc=$rc (failing closed). ${err//[^ -~]/ }" ;;
   esac
 fi
 

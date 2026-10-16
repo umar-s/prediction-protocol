@@ -337,6 +337,17 @@ printf '\000' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a file of one NUL (
 printf '2026-10-16T00:00:00Z\tvcs-force\tY\000Q==\n' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a NUL inside the base64 makes the line corrupt, never a repaired command" '[ "$(one)" = "1 corrupt " ]'
 for b in A '=' 'A==' 'YQ'; do printf '2026-10-16T00:00:00Z\tvcs-force\t%s\n' "$b" > "$PP_STATE_DIR/sessions/dr-2/denies"; check "base64 '$b' (not the full grammar) is corrupt" '[ "$(one)" = "1 corrupt " ]'; done
 printf '2026-10-16T00:00:00Z\tvcs-force\tYQ==\n' > "$PP_STATE_DIR/sessions/dr-2/denies"; check "a well-formed line passes as itself" '[ "$(one)" = "1 vcs-force YQ==" ]'
+PP_SESSION="dr-3" "$predict" on DR-3 --task >/dev/null
+cp -a "$P" "$T/nolib3"; rm "$T/nolib3/lib/common.sh"
+OUT="$(stdin dr-3 'git push --force origin main' | PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?; dis dr-3 0 gate-error "''"; r=$?
+check "a wrapper deny before the libraries load (common.sh missing) is recorded as gate-error" 'is_deny && [ $r -eq 0 ]'
+rm "$T/nolib3/lib/classify.sh"
+OUT="$(stdin dr-3 'ls' | PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?; dis dr-3 1 gate-error "''"; r=$?
+check "classify.sh missing: even ls is denied, and the deny is recorded" 'is_deny && [ $r -eq 0 ]'
+OUT="$(stdin dr-3 'git push --force origin main' | env -u HOME PP_SESSION="dr-3" bash "$T/nolib3/hooks/predict-gate.sh" 2>/dev/null)"; GRC=$?
+check "HOME unset: the wrapper's literal deny still prints and exits 2" 'is_deny'
+OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/dr-3/state"}}' "$PP_STATE_DIR" | env -u HOME PP_SESSION="dr-3" bash "$guard" 2>/dev/null)"; GRC=$?
+check "HOME unset: the state guard still denies and records (its record never ends the hook first)" 'is_deny && [ "$(dn dr-3)" = 4 ]'
 chmod 000 "$PP_STATE_DIR/sessions/dr-1/denies"; PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; chmod 644 "$PP_STATE_DIR/sessions/dr-1/denies"
 check "an unwritable record never changes the decision" 'is_deny'
 PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"

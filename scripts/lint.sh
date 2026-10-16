@@ -29,7 +29,8 @@ grep -q 'hook-seen' $P/hooks/predict-gate.sh || err "gate lost the liveness stam
 # the deny record: every deny of a session with a state dir is written, by both hooks and the wrapper, and read back by status
 grep -q '^deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${cmd_b64:-}";' $P/hooks/predict-gate.sh || err "gate deny() lost the deny record"
 grep -qF 'sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"; then sdir=' $P/hooks/predict-gate.sh || err "gate lost the early session dir (a deny before stdin is parsed must still be recorded)"
-[ "$(grep -c 'pp_note_deny "$osdir" gate-error ""; deny_literal' $P/hooks/predict-gate.sh)" -eq 2 ] || err "the wrapper lost the gate-error record on a timeout or an error"
+grep -qF "printf '%s\\tgate-error\\t\\n'" $P/hooks/predict-gate.sh && grep -qF 'd="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-gate.sh || err "deny_literal lost its own gate-error record (every wrapper deny must be recorded, HOME-safe)"
+grep -qF '${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-state-guard.sh || err "the state guard's record must not depend on HOME being set (set -u would end the hook before its deny)"
 grep -q '^  note "$1"$' $P/hooks/predict-state-guard.sh && grep -q 'state-guard' $P/hooks/predict-state-guard.sh || err "state guard lost the deny record"
 grep -q 'never changes a decision' $P/lib/common.sh && grep -q '2>/dev/null || true' $P/lib/common.sh || err "pp_note_deny must stay best-effort and decision-neutral"
 grep -q '"denies":\[%s\]' $P/bin/predict && grep -q 'command_b64' $P/bin/predict && grep -q 'counted as class `corrupt`' $P/bin/predict || err "predict status lost the denies list"

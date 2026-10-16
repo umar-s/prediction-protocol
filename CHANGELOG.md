@@ -19,8 +19,10 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   command's base64 **as the stdin parser produced it** (never decoded and
   re-encoded: a shell decode drops trailing newlines); the state guard writes
   `state-guard` and the refused path; the outer wrapper writes `gate-error`
-  when the gate overruns its deadline or fails, and an input that never
-  parsed is recorded as `unclassified` — both keyed by a runner's
+  for every deny of its own (missing library, unreadable stdin, an error
+  trap, a deadline overrun, an inner failure — recorded by `deny_literal`
+  itself, builtins only), and an input that never parsed is recorded as
+  `unclassified` — both keyed by a runner's
   `PP_SESSION`, which the gate now resolves before it reads stdin. The hooks
   run outside any sandbox; a Codex model in `workspace-write` cannot write
   the state (observed). `pp_note_deny` is best-effort and decision-neutral —
@@ -33,7 +35,7 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   text status prints `denies=N`.
 - `references/hook-engineering.md`: the deny record next to the liveness
   stamp; README / README.ru: loop-foundry reads a tick's denies from status.
-- 21 controls (200): the record for a gate deny; byte-exact round trips of a
+- 25 controls (204): the record for a gate deny; byte-exact round trips of a
   command with a newline, a tab and quotes and of one ending in `\n\n`; the
   state guard keyed by `PP_SESSION`, by a compact stdin session id and by one
   spread over JSON whitespace; an unparsable input and a deadline overrun
@@ -42,7 +44,10 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   JSON intact; an unwritable record leaving the deny intact; a malformed
   `active` value; a pretty-printed `apply_patch` refused; a file of one NUL,
   a NUL inside the base64 and base64 outside the full grammar (`A`, `=`,
-  `A==`, `YQ`) counted as `corrupt`. Lint pins each rule.
+  `A==`, `YQ`) counted as `corrupt`; a wrapper deny before the libraries
+  load (common.sh missing, classify.sh missing — then even `ls`) recorded as
+  `gate-error`; the gate's literal deny and the state guard deny with `HOME`
+  unset. Lint pins each rule.
 
 ### Fixed
 - The state guard matched `"file_path":"…"` and `"tool_name":"apply_patch"`
@@ -63,6 +68,14 @@ five rounds, ended there). The fix belongs here, where the deny is decided.
   with `realpath` resolution is a candidate for the next patch.
 
 ### Verified
+- `tests/platform-probe.sh --codex` (Codex CLI 0.162.1): every row as in
+  1.1.0 — deny and exit 2 block, ask/exit 1/broken JSON/timeout run the
+  command, under the protocol without a receipt denied with the recipe,
+  with a receipt passed silently, `apply_patch` into the state denied.
+  `tests/platform-probe.sh` (Claude Code 2.1.301, haiku): deny, exit 2 and
+  the fail-open rows reproduced; the `ask` row's answer was displaced by a
+  memory plugin's notice in the probe session (environmental — the ask path
+  is unchanged since 1.1.0, where it was verified).
 - Live through Codex CLI 0.162.1 (`codex exec -s read-only`, the dev hooks
   trusted by hash in an isolated `CODEX_HOME`): `git push --force` under the
   protocol without a receipt was denied and `predict status --json` listed
@@ -87,6 +100,11 @@ never holds become \001 before the shell reads them, so the line is
 new reader rules had controls but no lint pins (Required — pinned, each pin
 shown to fail when its rule is removed); the self-check's base64 count was
 stale (Nit — 16); the state guard note now names its premises (FYI).
+Round 4 (`c0b1d5c`, not ready): the wrapper's literal denies before the
+libraries load were not recorded (Required — `deny_literal` records itself,
+inlined, under `PP_SESSION`; the same pass found that an unset `HOME` under
+`set -u` would have ended the state guard's new record before its deny
+printed — both recorders now use `${HOME:-}`, with controls).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for

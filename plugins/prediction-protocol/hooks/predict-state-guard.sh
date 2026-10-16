@@ -18,7 +18,7 @@ note() {
   local s="${PP_SESSION:-}" d
   if [ -z "$s" ] && [[ "$input" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]]; then s="${BASH_REMATCH[1]}"; fi   # any JSON whitespace around the colon
   [[ "$s" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || return 0
-  d="${PP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/prediction-protocol}/sessions/$s"
+  d="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"   # ${HOME:-}: set -u must not end the hook before its deny
   [ -d "$d" ] || return 0
   { printf '%s\tstate-guard\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(printf '%s' "$1" | base64 | tr -d '\n')" >> "$d/denies"; } 2>/dev/null || true
 }
