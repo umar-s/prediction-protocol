@@ -299,5 +299,25 @@ OUT="$(env -u CLAUDE_ENV_FILE -u CLAUDE_PLUGIN_ROOT PLUGIN_ROOT="$P" bash "$P/ho
 ( unset PP_SESSION; "$predict" status >/dev/null 2>&1 ); check "CLI: no id at all → rc 2" '[ $? -eq 2 ]'
 PP_SESSION="lp-1" CODEX_SESSION_ID=cx-9 "$predict" off --reason r > "$T/lpo.out" 2>&1; check "loop: off inside a Codex session is refused (the operator's act)" '[ $? -eq 2 ] && grep -q "operator" "$T/lpo.out"'
 
+echo "# 18 the deny record: every deny the hooks issue for a session with a state dir, read back through predict status --json"
+dlist() { PP_SESSION="$1" "$predict" status --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps([[x["class"], x["command"]] for x in d["denies"]]))'; }
+PP_SESSION="dr-1" "$predict" on DR-1 --task >/dev/null
+PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; check "a deny under the protocol is recorded: class and the exact command" 'is_deny && [ "$(dlist dr-1)" = "[[\"vcs-force\", \"git push --force origin main\"]]" ]'
+PP_SESSION="dr-1" gate dr-1 "$(printf 'rm -rf ./a\n\techo "x"')"; check "a command with a newline, a tab and quotes comes back byte for byte" 'is_deny && [ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; print(repr(json.load(sys.stdin)[\"denies\"][1][\"command\"]))")" = "'"'"'rm -rf ./a\\n\\techo \"x\"'"'"'" ]'
+OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s/sessions/dr-1/state","content":"x"}}' "$PP_STATE_DIR" | PP_SESSION="dr-1" bash "$guard" 2>/dev/null)"; GRC=$?
+check "a state-guard deny is recorded as state-guard with the refused path" 'is_deny && [ "$(dlist dr-1 | python3 -c "import json,sys; print(json.load(sys.stdin)[2])")" = "['"'"'state-guard'"'"', '"'"'$PP_STATE_DIR/sessions/dr-1/state'"'"']" ]'
+OUT="$(ap "$(printf '*** Begin Patch\n*** Update File: %s/sessions/dr-1/state\n@@\n-active=1\n+active=0\n*** End Patch' "$PP_STATE_DIR")" | sed 's/"session_id":"s"/"session_id":"dr-1"/' | env -u PP_SESSION bash "$guard" 2>/dev/null)"; GRC=$?
+check "an apply_patch state-guard deny is keyed by the stdin session id when no PP_SESSION is set" 'is_deny && [ "$(dlist dr-1 | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")" = 4 ]'
+OUT="$(stdin dr-1 'git push --force origin main' | PP_SESSION="dr-1" PP_DEADLINE=1 PP_TEST_SLEEP=3 bash "$gate" 2>/dev/null)"; GRC=$?
+check "a deadline overrun is recorded by the wrapper as gate-error, command unknown" 'is_deny && [ "$(dlist dr-1 | python3 -c "import json,sys; print(json.load(sys.stdin)[-1])")" = "['"'"'gate-error'"'"', '"'"''"'"']" ]'
+PP_SESSION="dr-0" gate dr-0 'git push --force origin main' "$CX"; check "outside the protocol (no state dir) a deny writes nothing" 'is_deny && [ ! -e "$PP_STATE_DIR/sessions/dr-0" ]'
+printf '2026-10-16T00:00:00Z\tvcs-force\t%%%%not-base64\n' >> "$PP_STATE_DIR/sessions/dr-1/denies"
+check "an undecodable record line still counts, with an empty command — never dropped" '[ "$(dlist dr-1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(len(d), d[-1])")" = "6 ['"'"'vcs-force'"'"', '"'"''"'"']" ]'
+check "the text status names the count" 'PP_SESSION=dr-1 "$predict" status | grep -q "denies=6"'
+chmod 000 "$PP_STATE_DIR/sessions/dr-1/denies"; PP_SESSION="dr-1" gate dr-1 'git push --force origin main'; chmod 644 "$PP_STATE_DIR/sessions/dr-1/denies"
+check "an unwritable record never changes the decision" 'is_deny'
+PP_SESSION="dr-1" "$predict" status --json >/dev/null; sed -i 's/^active=1$/active=x/' "$PP_STATE_DIR/sessions/dr-1/state"
+check "a malformed active value reads as 0 and the JSON stays JSON" '[ "$(PP_SESSION=dr-1 "$predict" status --json | python3 -c "import json,sys; print(json.load(sys.stdin)[\"active\"])")" = 0 ]'
+
 echo "tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

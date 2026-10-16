@@ -5,6 +5,59 @@ All notable changes to this plugin. The format follows
 [SemVer](https://semver.org/). The single source of the version is
 `plugins/prediction-protocol/.claude-plugin/plugin.json`.
 
+## [1.2.0] — 2026-10-16
+
+The deny record. A deny used to leave no trace a consumer could rely on, so
+loop-foundry's runner parsed each harness's output for it — and on Codex a
+hook deny is absent from `codex exec --json` and only in a stderr log whose
+multi-line entries a command can imitate (loop-foundry 1.2.0's review,
+five rounds, ended there). The fix belongs here, where the deny is decided.
+
+### Added
+- Every deny the gate or the state guard issues for a session whose state
+  dir exists appends one line to `denies` in that dir: utc, class, base64 of
+  the exact command (one record however many newlines or tabs it holds); the
+  state guard writes `state-guard` and the refused path; the outer wrapper
+  writes `gate-error` with an unknown command when the gate overruns its
+  deadline or fails, keyed by a runner's `PP_SESSION`. The hooks run outside
+  any sandbox; a Codex model in `workspace-write` cannot write the state
+  (observed). `pp_note_deny` is best-effort and decision-neutral — an
+  unwritable record never changes a deny (control).
+- `predict status --json` returns them as `denies` — `[{ts, class,
+  command}]`, the command decoded; an undecodable line still counts, with an
+  empty command (a deny is never dropped by the reader). The text status
+  prints `denies=N`.
+- `references/hook-engineering.md`: the deny record next to the liveness
+  stamp; README / README.ru: loop-foundry reads a tick's denies from status.
+- 10 controls (189): the record for a gate deny, byte-exact round trip of a
+  command with a newline, a tab and quotes, the state guard by `PP_SESSION`
+  and by the stdin session id, the wrapper's `gate-error` on a deadline
+  overrun, nothing written outside the protocol, an undecodable line kept,
+  an unwritable record leaving the deny intact, a malformed `active` value.
+  Lint pins each rule.
+
+### Fixed
+- `predict status --json` printed the raw `active` value; anything but `0`
+  or `1` (a hand-edited state) made the output invalid JSON. It now reads as
+  `0` — not active.
+
+### Verified
+- Live through Codex CLI 0.162.1 (`codex exec -s read-only`, the dev hooks
+  trusted by hash in an isolated `CODEX_HOME`): `git push --force` under the
+  protocol without a receipt was denied and `predict status --json` listed
+  `{"class": "vcs-force", "command": "git push --force origin main"}`.
+  `hooks.json` is unchanged — the Codex trust hashes of 1.1.0 still hold.
+
+### Supply-chain self-check
+`git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for
+`curl|wget|fetch|http`, `_API_KEY|process.env|~/.ssh`, `rm -rf`, `eval`,
+`base64`. `rm -rf` — one hit, a test fixture command string fed to the gate
+(never executed). `base64` — six hits, all the deny record: encoding the
+command into one line (`common.sh`, the state guard), decoding it in
+`predict status`, the reference text, and a test's undecodable line. No
+network, no credentials, no `eval`. The hooks now append to a file in the
+session's own state dir — the only new write.
+
 ## [1.1.0] — 2026-10-15
 
 The second harness. Codex CLI reads the same `hooks/hooks.json` with the
@@ -253,6 +306,7 @@ exported `PREDICT`): the fix applies to sessions started after the update.
   in an **interactive** session is asserted from the documentation, not yet
   observed — first interactive run to confirm.
 
+[1.2.0]: https://github.com/umar-s/prediction-protocol/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/umar-s/prediction-protocol/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/umar-s/prediction-protocol/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/umar-s/prediction-protocol/compare/v1.0.1...v1.0.2

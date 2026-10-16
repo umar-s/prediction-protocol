@@ -26,6 +26,12 @@ grep -q 'pp_with_deadline "${PP_DEADLINE:-9}"' $P/hooks/predict-gate.sh || err "
 grep -q 'pp_prefilter "$input" || pp_prefilter_also "$input" || exit 0' $P/hooks/predict-gate.sh || err "gate lost the pre-filter"
 grep -q 'deny_literal "lib/common.sh is missing' $P/hooks/predict-gate.sh || err "gate lost the missing-lib deny"
 grep -q 'hook-seen' $P/hooks/predict-gate.sh || err "gate lost the liveness stamp"
+# the deny record: every deny of a session with a state dir is written, by both hooks and the wrapper, and read back by status
+grep -q '^deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${command:-}";' $P/hooks/predict-gate.sh || err "gate deny() lost the deny record"
+[ "$(grep -c 'pp_note_deny "$osdir" gate-error ""; deny_literal' $P/hooks/predict-gate.sh)" -eq 2 ] || err "the wrapper lost the gate-error record on a timeout or an error"
+grep -q '^  note "$1"$' $P/hooks/predict-state-guard.sh && grep -q 'state-guard' $P/hooks/predict-state-guard.sh || err "state guard lost the deny record"
+grep -q 'never changes a decision' $P/lib/common.sh && grep -q '2>/dev/null || true' $P/lib/common.sh || err "pp_note_deny must stay best-effort and decision-neutral"
+grep -q '"denies":\[%s\]' $P/bin/predict && grep -q 'a deny is never dropped here' $P/bin/predict || err "predict status lost the denies list"
 grep -q 'pp_delegated "$permission_mode" "$transcript_path"' $P/hooks/predict-gate.sh && [ "$(grep -c '\[ "$delegated" = 0 \] || pass' $P/hooks/predict-gate.sh)" -eq 2 ] || err "gate lost the delegated-session rule (auto mode must not ask; both ask sites)"
 grep -q 'auto|dontAsk|bypassPermissions' $P/lib/common.sh && grep -q '"permissionMode":"' $P/lib/common.sh || err "pp_delegated lost a mode or the transcript marker"
 # the second harness: Codex has no hook ask — deny where Claude Code asks, silent pass with a receipt, apply_patch guarded, context instead of env file

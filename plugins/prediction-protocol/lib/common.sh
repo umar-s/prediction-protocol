@@ -3,7 +3,7 @@
 # Session state lives OUTSIDE the repository, keyed by the Claude Code session
 # id, and is written only by bin/predict (plus the hook's `consumed` mark).
 export LC_ALL=C
-PP_VERSION="1.1.0"                      # lint: must equal .claude-plugin/plugin.json
+PP_VERSION="1.2.0"                      # lint: must equal .claude-plugin/plugin.json
 PP_CONTRACT=1                           # journal header contract number
 PP_TTL="${PP_TTL:-1800}"                # receipt lifetime, seconds
 PP_K="${PP_K:-20}"                      # report: below this n the rate is "insufficient"
@@ -49,6 +49,16 @@ pp_json_str() {
   printf '"%s"' "$s"
 }
 pp_session_dir() { printf '%s/sessions/%s' "$PP_STATE_ROOT" "$1"; }
+# The deny record: one line per deny the hooks issue for a session that has a
+# state dir — utc, class, base64 of the exact command (base64: a command with
+# newlines or tabs stays one record). The hooks run outside any sandbox, a
+# sandboxed model (Codex workspace-write) cannot write here, and a consumer
+# reads it through `predict status --json` (`denies`), never from a log. It
+# never changes a decision: no state dir → nothing written; any error ignored.
+pp_note_deny() {   # sdir class command
+  [ -n "${1:-}" ] && [ -d "$1" ] || return 0
+  { printf '%s\t%s\t%s\n' "$(pp_utc)" "$2" "$(printf '%s' "$3" | base64 | tr -d '\n')" >> "$1/denies"; } 2>/dev/null || true
+}
 # key=value file helpers (values are single-line)
 pp_kv_get() { [ -r "$1" ] || return 1; sed -n "s/^$2=//p" "$1" | head -1; }
 pp_kv_set() {   # file key value

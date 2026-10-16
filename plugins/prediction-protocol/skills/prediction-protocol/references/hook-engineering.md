@@ -84,6 +84,18 @@ and leaves every deny in place. No mode flag is exchanged between plugins.
   when it exists, so `predict status`/`report` can say whether the platform
   ever fired it. `predict on`'s selftest proves the script, not the
   registration.
+- A deny record: every deny the gate or the state guard issues for a
+  session whose state dir exists appends one line to `denies` there (utc,
+  class, base64 of the exact command — or `state-guard` and the refused
+  path, or `gate-error` from the wrapper with `PP_SESSION` set), and
+  `predict status --json` returns them as `denies`. A deny leaves no trace
+  in the platform's own output that a consumer can rely on — on Codex it is
+  absent from `codex exec --json` and only in a log whose framing a command
+  can imitate — so a loop's `gate_denies` comes from here. The hooks run
+  outside the sandbox and a Codex model in `workspace-write` cannot write
+  the state; an unsandboxed Claude shell can, as it can the rest of the
+  state. Best-effort and decision-neutral: an unwritable record never
+  changes a deny.
 - The version is in every reason; the platform table above is re-verified
   with `tests/platform-probe.sh` before a release.
 - `PostToolUse` cannot block or undo — grading lives in the CLI, not in a

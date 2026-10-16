@@ -153,6 +153,10 @@ hash — after every plugin update, again; a runner passes
   difference), a second signal on the shadow → gated → autonomous ladder. A
   halt is a hook-enforced stop, and under `--loop` `ack`, `withdraw` and
   `off` refuse to run inside a model session — they are the operator's.
+  Since 1.2.0 the tick's denies come from `predict status --json`
+  (`denies`): the hooks record every deny of a session under the protocol —
+  the command, or the path the state guard refused — where a sandboxed
+  model cannot write, instead of the runner parsing each harness's output.
 
 ## Checks
 

@@ -149,8 +149,21 @@ cmd_status() {
   active="$(pp_kv_get "$STATE" active 2>/dev/null || echo 0)"; journal="$(pp_kv_get "$STATE" journal_path 2>/dev/null || true)"; halted="$(pp_kv_get "$STATE" halted 2>/dev/null || true)"
   seen="$(cat "$SDIR/hook-seen" 2>/dev/null || echo never)"
   for d in "$SDIR"/receipts/*/; do [ -d "$d" ] || continue; [ -e "$d/closed" ] && continue; if [ -e "$d/consumed" ]; then inflight=$((inflight+1)); else open=$((open+1)); fi; done
-  if [ "${1:-}" = --json ]; then printf '{"session":"%s","active":%s,"journal":%s,"halted":%s,"open":%s,"inflight":%s,"gate_seen":%s,"version":"%s"}\n' "$SID8" "${active:-0}" "$(pp_json_str "$journal")" "$(pp_json_str "$halted")" "$open" "$inflight" "$(pp_json_str "$seen")" "$PP_VERSION"
-  else echo "predict v$PP_VERSION · session $SID8 · active=${active:-0} · journal=${journal:-none} · open=$open · in-flight=$inflight · halted=${halted:-no} · gate: seen $seen"; fi
+  [[ "${active:-0}" =~ ^[01]$ ]] || active=0   # anything but 1 is "not active" — and the JSON stays JSON
+  # the hooks' deny record (pp_note_deny): one object per deny, the command decoded; an
+  # undecodable line still counts, with an empty command — a deny is never dropped here
+  local denies="" dn=0 ts cls b64 dc
+  if [ -r "$SDIR/denies" ]; then
+    while IFS=$'\t' read -r ts cls b64 || [ -n "${ts:-}" ]; do
+      [ -n "${ts:-}${cls:-}${b64:-}" ] || continue
+      dc="$(printf '%s' "${b64:-}" | base64 -d 2>/dev/null)" || dc=""
+      [ "$dn" -eq 0 ] || denies="$denies,"
+      denies="$denies{\"ts\":$(pp_json_str "${ts:-}"),\"class\":$(pp_json_str "${cls:-}"),\"command\":$(pp_json_str "$dc")}"
+      dn=$((dn+1))
+    done < "$SDIR/denies"
+  fi
+  if [ "${1:-}" = --json ]; then printf '{"session":"%s","active":%s,"journal":%s,"halted":%s,"open":%s,"inflight":%s,"gate_seen":%s,"denies":[%s],"version":"%s"}\n' "$SID8" "${active:-0}" "$(pp_json_str "$journal")" "$(pp_json_str "$halted")" "$open" "$inflight" "$(pp_json_str "$seen")" "$denies" "$PP_VERSION"
+  else echo "predict v$PP_VERSION · session $SID8 · active=${active:-0} · journal=${journal:-none} · open=$open · in-flight=$inflight · halted=${halted:-no} · denies=$dn · gate: seen $seen"; fi
   [ -z "$halted" ]
 }
 

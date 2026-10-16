@@ -44,14 +44,16 @@ if [ "${1:-}" != "--inner" ]; then
   pp_prefilter "$input" || pp_prefilter_also "$input" || exit 0
   [ -r "$here/../lib/common.sh" ] || deny_literal "lib/common.sh is missing: broken install (failing closed)"
   . "$here/../lib/common.sh" || deny_literal "lib/common.sh failed to load (failing closed)"
+  # where a deny of the wrapper itself is recorded: only a runner's PP_SESSION — stdin is not parsed out here
+  osdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"; then osdir="$(pp_session_dir "$PP_SESSION")"; fi
   errf="$(mktemp "${TMPDIR:-/tmp}/pp-gate-err.XXXXXX" 2>/dev/null)" || errf=/dev/null
   if out="$(printf '%s' "$input" | pp_with_deadline "${PP_DEADLINE:-9}" bash "${BASH_SOURCE[0]}" --inner 2>"$errf")"; then rc=0; else rc=$?; fi
   err=""; [ "$errf" != /dev/null ] && { err="$(head -c 600 "$errf" 2>/dev/null || true)"; rm -f "$errf"; }
   case "$rc" in
     0) printf '%s' "$out"; [ -n "$out" ] && printf '\n'; exit 0 ;;
     2) printf '%s' "$out"; [ -n "$out" ] && printf '\n'; printf '%s\n' "$err" >&2; exit 2 ;;
-    124|137|143) deny_literal "the gate exceeded its deadline on a command that carries a one-way token (failing closed). ${err//[^ -~]/ }" ;;
-    *) deny_literal "gate error rc=$rc (failing closed). ${err//[^ -~]/ }" ;;
+    124|137|143) pp_note_deny "$osdir" gate-error ""; deny_literal "the gate exceeded its deadline on a command that carries a one-way token (failing closed). ${err//[^ -~]/ }" ;;
+    *) pp_note_deny "$osdir" gate-error ""; deny_literal "gate error rc=$rc (failing closed). ${err//[^ -~]/ }" ;;
   esac
 fi
 
@@ -60,7 +62,7 @@ fi
 . "$here/../lib/classify.sh"
 predict="\"$PLUGIN_ROOT/bin/predict\""
 emit() { printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":%s}}\n' "$1" "$(pp_json_str "$2")"; }
-deny() { emit deny "prediction-protocol v$PP_VERSION: $1"; printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2; exit 2; }
+deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${command:-}"; emit deny "prediction-protocol v$PP_VERSION: $1"; printf 'prediction-protocol v%s: %s\n' "$PP_VERSION" "$1" >&2; exit 2; }
 ask()  {   # Claude Code: the permission prompt carries the reason. Codex: no hook ask exists — deny, and say why
   [ "${harness:-claude}" = claude ] || deny "$1 — this harness cannot ask: Codex has no PreToolUse ask (a hook that asks is marked failed and the command runs), so the gate denies instead. Either run the command yourself from a plain shell, or put the session under the protocol and open a receipt for it — then the receipt is the witness and the gate passes it silently."
   emit ask "prediction-protocol v$PP_VERSION: $1"; exit 0
