@@ -120,7 +120,12 @@ builtins-only rule had controls but no lint pin (Required — lint extracts
 the bodies of `deny_literal`, the guard's `note` and `b64` and refuses an
 external command or a command substitution there, and pins the builtin
 timestamp and the guard's builtin stdin read; each pin shown to fail when
-its rule is broken).
+its rule is broken). Round 7 (`c541b5b`, not ready): that pin was a blacklist of
+command names — `sleep 30` or a second substitution on the record line
+passed it (Required — each recorder body is pinned by its sha256: any change
+fails lint until it is re-pinned on purpose, next to the empty-PATH
+controls that prove the body still denies and records without an external
+process; the reviewer's two mutations and two more are shown to fail).
 
 ### Supply-chain self-check
 `git diff v1.1.0..v1.2.0 -- plugins/`, added lines grepped for

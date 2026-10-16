@@ -31,12 +31,16 @@ grep -q '^deny() { pp_note_deny "${sdir:-}" "${CLS:-unclassified}" "${cmd_b64:-}
 grep -qF 'sdir=""; if [ -n "${PP_SESSION:-}" ] && pp_valid_session "$PP_SESSION"; then sdir=' $P/hooks/predict-gate.sh || err "gate lost the early session dir (a deny before stdin is parsed must still be recorded)"
 grep -qF "printf '%s\\tgate-error\\t\\n'" $P/hooks/predict-gate.sh && grep -qF 'd="${PP_STATE_DIR:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-gate.sh || err "deny_literal lost its own gate-error record (every wrapper deny must be recorded, HOME-safe)"
 grep -qF '${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/predict-state-guard.sh || err "the state guard's record must not depend on HOME being set (set -u would end the hook before its deny)"
-# the recorders that run before a deny prints are builtins only: an external process that hung would hold the deny past the platform's timeout
+# the recorders that run before a deny prints are builtins only: an external process that hung would hold the deny past
+# the platform's timeout. A blacklist of command names cannot hold that (sleep, a second substitution on the same line),
+# so each body is pinned exactly: any change fails here until the pin is updated on purpose, next to the empty-PATH
+# controls in tests/run.sh that show the changed body still denies and records without an external process.
 fbody() { awk -v f="$2" '$0 ~ "^"f"\\(\\) \\{" {on=1} on {print} on && /^}/ {exit}' "$1"; }
-for fn in "$P/hooks/predict-gate.sh deny_literal" "$P/hooks/predict-state-guard.sh note" "$P/hooks/predict-state-guard.sh b64"; do
-  b="$(fbody $fn | sed -E 's/[[:space:]]#[[:space:]].*$//')"; [ -n "$b" ] || { err "recorder ${fn##* } not found"; continue; }   # code only: trailing comments cut
-  printf '%s\n' "$b" | grep -Eq '(^|[^A-Za-z_])(date|base64|tr|cat|sed|awk|od)([^A-Za-z_-]|$)' && err "recorder ${fn##* } calls an external command (builtins only)"
-  printf '%s\n' "$b" | grep -E '\$\([^(]' | grep -vqF '$(b64 "$1")' && err "recorder ${fn##* } runs a command substitution other than the pure-bash b64"
+for pin in "$P/hooks/predict-gate.sh deny_literal 01ce8a39dcee9a1f9f0ae99aed3b97dd305f9a24107f025467b7d5a43eb4b4a4" \
+           "$P/hooks/predict-state-guard.sh note e8cb58a4ccb7d11571838c6b26ae9852220ed55cd84b5ac1714791e46f2f1872" \
+           "$P/hooks/predict-state-guard.sh b64 fd54a03fc18a244ff45489d65376ef359ecc521bd33a870138af03a81977179c"; do
+  set -- $pin
+  [ "$(fbody "$1" "$2" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-64)" = "$3" ] || err "recorder $2 changed — it must stay builtins only; re-pin its sha256 here only after the empty-PATH controls pass"
 done
 for f in "$P/hooks/predict-gate.sh" "$P/hooks/predict-state-guard.sh"; do grep -qF "TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1" "$f" || err "$(basename "$f") lost the builtin UTC timestamp"; done
 grep -q "^IFS= read -r -d '' input || true" $P/hooks/predict-state-guard.sh && ! grep -qF '$(cat)' $P/hooks/predict-state-guard.sh || err "the state guard must read stdin with the builtin read, not cat"
