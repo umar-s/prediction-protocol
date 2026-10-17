@@ -5,6 +5,31 @@ All notable changes to this plugin. The format follows
 [SemVer](https://semver.org/). The single source of the version is
 `plugins/prediction-protocol/.claude-plugin/plugin.json`.
 
+## [1.2.1] — 2026-10-17
+
+### Fixed
+- `--expect lines=0` never graded HIT on an empty stdout, so a receipt like
+  "the branch is gone: `git branch --list x` → `lines=0`" came back MISS
+  after the action did exactly what it predicted. `grade()` counted lines
+  with `grep -c '' f || echo 0`; `grep -c` prints `0` *and* exits 1 on an
+  empty file, so the fallback appended a second `0` and the count was
+  `"0\n0"`. The shape is the one 1.0.1 fixed in `predict on`; the grader kept
+  it because `tests/run.sh` had no `lines=` control at all. Three now:
+  `lines=0` on empty stdout → HIT, `lines=2` counts an unterminated last line,
+  `lines=0` on one line → MISS. Found in use (a task-flow session in the
+  tictactoe lab).
+
+### Changed
+- `PP_VERSION` in `lib/common.sh` → `1.2.1`, so its sha256 pin in
+  `scripts/lint.sh` is re-pinned; no other line of the file changed.
+
+Verified: `tests/run.sh` 220/0, `tests/classify-corpus.sh` 329/0,
+`scripts/lint.sh` OK, `tests/platform-probe.sh` and `--codex` pass every row.
+
+Supply-chain self-check (`git diff v1.2.0..HEAD -- plugins/`): one line of
+`bin/predict` and the version line of `lib/common.sh`; tests aside, no
+network calls, credentials, deletions, `eval` or base64.
+
 ## [1.2.0] — 2026-10-16
 
 The deny record. A deny used to leave no trace a consumer could rely on, so
@@ -451,6 +476,7 @@ exported `PREDICT`): the fix applies to sessions started after the update.
   in an **interactive** session is asserted from the documentation, not yet
   observed — first interactive run to confirm.
 
+[1.2.1]: https://github.com/umar-s/prediction-protocol/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/umar-s/prediction-protocol/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/umar-s/prediction-protocol/compare/v1.0.3...v1.1.0
 [1.0.3]: https://github.com/umar-s/prediction-protocol/compare/v1.0.2...v1.0.3

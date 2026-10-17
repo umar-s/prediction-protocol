@@ -1,6 +1,6 @@
 {
   "name": "prediction-protocol",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Prediction before action: a PreToolUse gate that refuses one-way commands (migrations, force-push, merge, deploy, restart, remote exec, mutating HTTP, grants/secrets, recursive delete) unless the session holds a receipt for that exact command — hypothesis, a measurement command and a falsifiable claim — and a `predict` CLI that opens the receipt, runs the measurement itself and grades HIT / MISS / INCONCLUSIVE into a journal with a refuted-beliefs ledger. Halt at the first miss. Machine grading, no self-grading.",
   "author": { "name": "Sergei", "email": "sergei.bitsmedia@gmail.com" },
   "license": "MIT",

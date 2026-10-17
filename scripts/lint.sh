@@ -39,7 +39,7 @@ grep -qF '${HOME:-}/.local/state}/prediction-protocol}/sessions/$s"' $P/hooks/pr
 # purpose, after tests/run.sh passes on the edited file (the deny-record and empty-PATH controls among it).
 for pin in "$P/hooks/predict-gate.sh 3368c90c8de634568432e75b5d30dc7b3036468846ffef0bb184f22b15bef367" \
            "$P/hooks/predict-state-guard.sh 4505206925e7f71e8171ab33cfd72671cae18f34cf1d0ac0979b3b1833968942" \
-           "$P/lib/common.sh 078f17e132f618faf73defc12ae57341af0a7bc9369a4f6daa7cf49bb08d6c61" \
+           "$P/lib/common.sh 26cf0804660bd2e63b79ce58becb7bee1c3157f8f4d46d7511e42f99eae67a36" \
            "$P/lib/classify.sh 463053600459fe19306a213b9d85a8bc007388a39b16a728c41156baa76d8b19"; do
   set -- $pin
   [ "$({ sha256sum "$1" 2>/dev/null || shasum -a 256 "$1"; } | cut -c1-64)" = "$2" ] || err "$(basename "$1") changed — the deny path's recorders must stay builtins only; re-pin its sha256 here only after tests/run.sh passes"

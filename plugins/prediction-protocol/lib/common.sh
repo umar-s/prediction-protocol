@@ -3,7 +3,7 @@
 # Session state lives OUTSIDE the repository, keyed by the Claude Code session
 # id, and is written only by bin/predict (plus the hook's `consumed` mark).
 export LC_ALL=C
-PP_VERSION="1.2.0"                      # lint: must equal .claude-plugin/plugin.json
+PP_VERSION="1.2.1"                      # lint: must equal .claude-plugin/plugin.json
 PP_CONTRACT=1                           # journal header contract number
 PP_TTL="${PP_TTL:-1800}"                # receipt lifetime, seconds
 PP_K="${PP_K:-20}"                      # report: below this n the rate is "insufficient"
