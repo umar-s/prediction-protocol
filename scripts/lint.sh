@@ -108,8 +108,8 @@ for ph in 'contract=1' 'exit=N' 'stdout==' 'stdout~=' 'stdout-in=' 'lines=N' 'ht
 H=$P/skills/prediction-protocol/references/hook-engineering.md
 for ph in 'exit 1' 'timeout' 'agent_id' 'CLAUDE_CODE_ENTRYPOINT' 'LC_ALL=C' 'PowerShell' 'allow' 'synthetic stdin' 'control byte' 'watchdog' 'hook-seen' 'CLAUDE_ENV_FILE' 'permission_mode' 'transcript_path' 'permission-mode' 'turn_id' 'trusted_hash' 'apply_patch' 'PLUGIN_ROOT' 'CODEX_SESSION_ID' '--dangerously-bypass-hook-trust' 'bypassPermissions'; do grep -qF -- "$ph" "$H" || err "hook-engineering.md lost: $ph"; done
 # house hygiene
-grep -rnE '/home/[a-z]+/' $P README.md README.ru.md CHANGELOG.md CLAUDE.md scripts .github 2>/dev/null | grep -v 'tests/corpus' >/dev/null && err "personal absolute path in a tracked file"
-grep -q 'claude plugin validate plugins/prediction-protocol' README.md && grep -q 'claude plugin validate plugins/prediction-protocol' README.ru.md && grep -q 'claude plugin validate plugins/prediction-protocol' CLAUDE.md || err "docs lost the correct validate command"
+grep -rnE '/home/[a-z]+/' $P README.md README.ru.md CHANGELOG.md CLAUDE.md AGENTS.md scripts .github 2>/dev/null | grep -v 'tests/corpus' >/dev/null && err "personal absolute path in a tracked file"
+grep -q 'claude plugin validate plugins/prediction-protocol' README.md && grep -q 'claude plugin validate plugins/prediction-protocol' README.ru.md && grep -q 'claude plugin validate plugins/prediction-protocol' AGENTS.md || err "docs lost the correct validate command"
 grep -q 'permissions:' .github/workflows/check.yml || err "check.yml has no permissions block"
 grep -q '^| auto' README.md && grep -q '^| auto' README.ru.md || err "README pair lost the auto-mode row"
 grep -q '^| Codex' README.md && grep -q '^| Codex' README.ru.md || err "README pair lost the Codex row"
