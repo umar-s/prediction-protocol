@@ -229,7 +229,7 @@ run_observe() {   # obs timeout outfile → prints exit code
 }
 grade() {   # claim exit stdout-file → HIT|MISS|INCONCLUSIVE (spec §3: a measurement that did not run cleanly is inconclusive)
   local claim="$1" rc="$2" f="$3" out first n
-  out="$(tr -d '\r' < "$f")"; first="$(head -n1 "$f" | tr -d '\r')"; n="$(grep -c '' "$f" 2>/dev/null || echo 0)"
+  out="$(tr -d '\r' < "$f")"; first="$(head -n1 "$f" | tr -d '\r')"; n="$(grep -c '' "$f" 2>/dev/null)"; n="${n:-0}"   # grep -c prints 0 and exits 1 on an empty file — a `|| echo 0` made it "0\n0"
   case "$claim" in
     exit=*) case "$rc" in 124|137) printf 'INCONCLUSIVE' ;; *) [ "$rc" = "${claim#exit=}" ] && printf 'HIT' || printf 'MISS' ;; esac; return ;;
   esac

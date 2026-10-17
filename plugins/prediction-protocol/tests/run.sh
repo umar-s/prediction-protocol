@@ -160,6 +160,15 @@ gate "$S" 'rm -rf ./j' '' t11 >/dev/null; stdin "$S" x '' t11 | bash "$fired"; "
 gate "$S" 'rm -rf ./k' '' t12 >/dev/null; stdin "$S" x '' t12 | bash "$fired"; "$predict" close "$ID12" >/dev/null; check "stdout-in grades" '[ $? -eq 0 ]'
 "$predict" open --action 'rm -rf ./l' --hypothesis h --observe 'printf 000' --expect 'http=000' >/dev/null; ID13="${ID1%-*}-13"
 gate "$S" 'rm -rf ./l' '' t13 >/dev/null; stdin "$S" x '' t13 | bash "$fired"; "$predict" close "$ID13" >/dev/null; check "http=000 → INCONCLUSIVE" '[ $? -eq 1 ]'; "$predict" withdraw "$ID13" --reason x >/dev/null
+# lines=N counts the observe's stdout lines (an unterminated last line counts). grep -c prints its 0 *and* exits 1
+# on an empty file, so a `|| echo 0` fallback made n "0\n0" and lines=0 could never HIT (1.0.1 fixed the same shape in `on`)
+PP_SESSION=lines-1 "$predict" on DEV-2 --task >/dev/null
+L1="$(PP_SESSION=lines-1 "$predict" open --scope advisory --action x --hypothesis h --observe 'true' --expect lines=0 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION=lines-1 "$predict" close "$L1" >/dev/null 2>&1; check "lines=0 on empty stdout → HIT" '[ $? -eq 0 ] && grep -q "^### predict $L1 .*verdict=HIT" docs/evidence/DEV-2.md'
+L2="$(PP_SESSION=lines-1 "$predict" open --scope advisory --action x --hypothesis h --observe "printf 'a\\nb'" --expect lines=2 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION=lines-1 "$predict" close "$L2" >/dev/null 2>&1; check "lines=2 counts an unterminated last line → HIT" '[ $? -eq 0 ] && grep -q "^### predict $L2 .*verdict=HIT" docs/evidence/DEV-2.md'
+L3="$(PP_SESSION=lines-1 "$predict" open --scope advisory --action x --hypothesis h --observe 'echo x' --expect lines=0 | sed -n 's/^predict \([0-9a-f-]*\) .*/\1/p')"
+PP_SESSION=lines-1 "$predict" close "$L3" >/dev/null 2>&1; check "lines=0 on one line → MISS" '[ $? -eq 1 ] && grep -q "^### predict $L3 .*verdict=MISS" docs/evidence/DEV-2.md'
 
 echo "# 8 secrets at the sink"
 printf '%s: %s\n%s\n%s\n%s\n200\n' "$AUTH" "$(fake_bearer)" "$(fake_aws)" "$(fake_pw)" "$(fake_json)" > "$T/leaky.txt"
